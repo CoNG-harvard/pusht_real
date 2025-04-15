@@ -136,8 +136,9 @@ try:
         # corners, ids, _ = detector.detectMarkers(color_image)
         # print(ids)
         
-        (pos, orient) = tracker.detect_block_pose(color_image)
-        color_image[pos[0]-thk:pos[0]+thk, pos[1]-thk:pos[1]+thk] = [0, 255, 0]
+        if res := tracker.detect_block_pose(color_image):
+            pos, orient = res
+            color_image[pos[0]-thk:pos[0]+thk, pos[1]-thk:pos[1]+thk] = [0, 255, 0]
 
         # Show images
         cv2.imshow('RealSense Color', color_image)
