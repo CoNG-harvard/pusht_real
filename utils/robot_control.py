@@ -56,6 +56,34 @@ def move_z(rtde_c,rtde_r, d, speed = 0.001):
     # When doing position-based force control, the speed has to be extremely slow for stable results.
     return rtde_c.moveL(target_pose,speed=speed, acceleration=0.1)
 
+def move_real_speed(rtde_c,rtde_r, d):
+    ''' 
+    d: speed command in millimeters
+    In the simulation, kp is 350
+    real: simu = 200:120
+    so the kp will change to ~ 600,
+    means action 1 approximate to 600mm/s, 0.6
+    if 100 Hz then 600 / 50 = 12 mm, maybe too large
+    '''
+    
+    tcp_pose = rtde_r.getActualTCPPose()
+    target_pose = tcp_pose.copy()
+    target_pose[0] += d[0]*0.1
+    target_pose[1] -= d[1]*0.1
+
+    # When doing position-based force control, the speed has to be extremely slow for stable results.
+    return rtde_c.servoL(target_pose, 0.0, 0.0, 
+                         0.3, # time
+                         0.2, #look_ahead time
+                         350 # gain
+                         )
+    # return rtde_c.moveL(target_pose, 
+    #                      np.linalg.norm(d), # speed
+    #                      )
+    # return rtde_c.speedL(target_pose, 
+    #                      np.linalg.norm(d), # speed
+    #                      )
+
 def move_x(rtde_c,rtde_r, d, speed = 0.001):
     ''' d: x-direction displancement in millimeters'''
     tcp_pose = rtde_r.getActualTCPPose()
