@@ -22,12 +22,15 @@ class TBlockTracker:
     def generate_template_bank(self, angle_step=1):
         template_bank = []
         keypoints_all = []
+        rotated_pts_all = []
         angles = np.arange(0, 360, angle_step)
         for angle in angles:
-            rotated, keypoints = rotate_image(self.temp_img, self.temp_keypoint, angle)
+            rotated, rotated_pts, keypoints = rotate_image(self.temp_img, self.temp_pts, self.temp_keypoint, angle)
+            rotated_pts_all.append(rotated_pts)
             template_bank.append(rotated)
             keypoints_all.append(keypoints)
-        temp_dct = {angle: (template, keypoint) for angle, (template, keypoint) in zip(angles, zip(template_bank, keypoints_all))}
+        temp_dct = {angle: (template, rotated_pts, keypoint) for angle, (template, keypoint, rotated_pts) in zip(
+            angles, zip(template_bank, keypoints_all, rotated_pts_all))}
         return temp_dct
     
     def detect_block_pose(self, image, morph_sz=11, use_kf=True):
@@ -68,7 +71,7 @@ class TBlockTracker:
         best_result = max(results, key=lambda x: x["score"])
         x, y = best_result['top_left']
 
-        _, keypoint = self.temp_dct[best_result['angle']]
+        _, _, keypoint = self.temp_dct[best_result['angle']]
         kpx, kpy = keypoint
         kpx = kpx + y
         kpy = kpy + x
@@ -90,7 +93,7 @@ def match_template_bank(image, temp_dct, color_u, color_l, mask_thk=80, morph_sz
     mask = mask[start_y: end_y, start_x: end_x]
 
     start = np.array([start_x, start_y])
-    for angle, (template, _) in temp_dct.items():
+    for angle, (template, _, _) in temp_dct.items():
         res = cv2.matchTemplate(mask, template, method)
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
         max_loc += start
@@ -123,7 +126,7 @@ def generate_template(length=4, scale=30, w=200, h=200):
     return template, pts, kp
 
 
-def rotate_image(image, keypoint, angle):
+def rotate_image(image, pts, keypoint, angle):
     """Rotate image around center without cropping."""
     h, w = image.shape
     center = (w // 2, h // 2)
@@ -135,7 +138,11 @@ def rotate_image(image, keypoint, angle):
     keypoint = Minv @ np.array([keypoint[0], keypoint[1], 1])
     keypoint = keypoint.astype(np.int32)
 
-    return rotated, keypoint
+    pts = np.hstack((pts, np.ones((pts.shape[0], 1))))
+    rotated_pts = pts @ M.T
+    rotated_pts = rotated_pts.astype(np.int32)
+
+    return rotated, rotated_pts, keypoint
 
 
 def angle_in(angle, low, high):
