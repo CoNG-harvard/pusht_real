@@ -12,6 +12,9 @@ import rtde_control
 import rtde_receive
 
 
+# Initial guess of fixed camera pose (rvec, tvec): [-1.83416353  2.11347714 -0.60475937] [-0.65697878 -0.14177968  0.6323136 ]
+
+
 
 # ============== Robot Configuration ==============
 rtde_c = rtde_control.RTDEControlInterface("192.168.1.10")
@@ -26,36 +29,63 @@ DIST_COEFFS_D405 = np.load(osp.join(pkg_dir, "data", "distortions.npy"))  # Repl
 
 # =============== Initialize cameras ==================
 # Configure both cameras
-pipeline1 = rs.pipeline()
+pipeline_d405 = rs.pipeline()
 config1 = rs.config()
 config1.enable_device('126122270638')  # Replace with your camera's serial number
 config1.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
 
-pipeline2 = rs.pipeline()
+pipeline_d435 = rs.pipeline()
 config2 = rs.config()
 config2.enable_device('233722070172')  # Replace with your camera's serial number
 config2.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
 
 # Start both pipelines
-pipeline1.start(config1)
-profile = pipeline2.start(config2)
+profile_d405 = pipeline_d405.start(config1)
+profile_d435 = pipeline_d435.start(config2)
 
-color_stream = profile.get_stream(rs.stream.color)  # Get color stream
-intr = color_stream.as_video_stream_profile().get_intrinsics()
+color_stream_d435 = profile_d435.get_stream(rs.stream.color)  # Get color stream
+color_stream_d405 = profile_d405.get_stream(rs.stream.color)  # Get color stream
+intr_d435 = color_stream_d435.as_video_stream_profile().get_intrinsics()
 
 # Print camera matrix and distortion coefficients
 cameraMatrix_d435 = np.array([
-    [intr.fx, 0, intr.ppx],
-    [0, intr.fy, intr.ppy],
+    [intr_d435.fx, 0, intr_d435.ppx],
+    [0, intr_d435.fy, intr_d435.ppy],
     [0, 0, 1]
 ])
 
-distortionCoeffs_d435 = np.array(intr.coeffs)  # [k1, k2, p1, p2, k3]
+distortionCoeffs_d435 = np.array(intr_d435.coeffs)  # [k1, k2, p1, p2, k3]
+
+intr_d405 = color_stream_d405.as_video_stream_profile().get_intrinsics()
+
+# Print camera matrix and distortion coefficients
+cameraMatrix_d405 = np.array([
+    [intr_d405.fx, 0, intr_d405.ppx],
+    [0, intr_d405.fy, intr_d405.ppy],
+    [0, 0, 1]
+])
+
+distortionCoeffs_d405 = np.array(intr_d405.coeffs)  # [k1, k2, p1, p2, k3]
+
+# ============== Set up camera parameters ==============
+device = profile_d405.get_device()
+color_sensor = device.query_sensors()[0]  # Usually the second sensor is the RGB camera
+
+# Turn off auto-exposure
+# if color_sensor.supports(rs.option.enable_auto_exposure):
+#     color_sensor.set_option(rs.option.enable_auto_exposure, 0)
+#     # color_sensor.set_option(rs.option.enable_auto_exposure, 1)
+# # Set manual exposure (in microseconds)
+# if color_sensor.supports(rs.option.exposure):
+#     color_sensor.set_option(rs.option.exposure, 1000)  # Try values like 50–500 depending on your lighting
+# Optionally set gain
+if color_sensor.supports(rs.option.gain):
+    color_sensor.set_option(rs.option.gain, 48)  # Default is 16; lower = less bright
 
 # ============== Initialize marker reader ==============
 markerId=0
 markerDict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT["DICT_4X4_50"])    
-markerReader_d405 = MarkerReader(markerId, markerDict, 38, CAMERA_MATRIX_D405, DIST_COEFFS_D405)
+markerReader_d405 = MarkerReader(markerId, markerDict, 38, cameraMatrix_d405, distortionCoeffs_d405)
 markerReader_d435 = MarkerReader(markerId, markerDict, 38, cameraMatrix_d435, distortionCoeffs_d435)
 
 # ====== Helper Functions ======
@@ -81,7 +111,7 @@ def rodrigues_to_matrix(rvec, tvec):
     return T
 
 # ====== Bundle Adjustment ======
-def bundle_adjustment_residuals(params, observations, robot_poses):
+def bundle_adjustment_residuals(params, observations, robot_poses, marker_poses):
     """
     Residuals for bundle adjustment.
     Args:
@@ -105,7 +135,7 @@ def bundle_adjustment_residuals(params, observations, robot_poses):
         ])
 
         # Transform marker corners to fixed camera frame
-        T_marker_to_fixed = ...  # From marker detection in fixed camera
+        T_marker_to_fixed = rodrigues_to_matrix(marker_poses)  # From marker detection in fixed camera
         T_marker_to_base = T_fixed_to_base @ T_marker_to_fixed
         marker_corners_base = (T_marker_to_base[:3, :3] @ marker_corners_3d.T + T_marker_to_base[:3, [3]]).T
 
@@ -143,8 +173,8 @@ if __name__ == "__main__":
     # (1) Collect data: Loop over multiple robot poses and detect markers
     while True:
         # Get frames from both cameras
-        frames1 = pipeline1.wait_for_frames()
-        frames2 = pipeline2.wait_for_frames()
+        frames1 = pipeline_d405.wait_for_frames()
+        frames2 = pipeline_d435.wait_for_frames()
         
         # Get color frames
         color_frame1 = frames1.get_color_frame()
@@ -176,7 +206,7 @@ if __name__ == "__main__":
             robot_cam_image = color_frame2
             found, robot_cam_image, marker = markerReader_d435.detectMarkers(robot_cam_image, markerDict)
             # rvec, tvec = estimate_marker_pose(corners, cameraMatrix_d435, distortionCoeffs_d435, MARKER_SIZE)
-            T_marker_to_cam = rodrigues_to_matrix(marker.rvec[0], marker.tvec[0])
+            T_marker_to_cam = rodrigues_to_matrix(marker.rvec[0], marker.tvec[0] / 1000)
             pose_cam = np.array(rtde_r.getActualTCPPose())  # From robot FK
             T_cam_to_base = rodrigues_to_matrix(pose_cam[3:], pose_cam[:3])
             robot_poses.append(T_cam_to_base)
@@ -193,8 +223,8 @@ if __name__ == "__main__":
         cv2.imshow('RealSense Cameras', combined)
 
     # (2) Initial guess for fixed camera pose (e.g., from first observation)
-    rvec, tvec = estimate_marker_pose(observations[0][0], CAMERA_MATRIX_D405, DIST_COEFFS_D405, MARKER_SIZE)
-    initial_pose = np.concatenate([tvec.flatten(), rvec.flatten()])
+    # Initial guess of fixed camera pose (rvec, tvec): [-1.83416353  2.11347714 -0.60475937] [-0.65697878 -0.14177968  0.6323136 ]
+    initial_pose = np.array([-0.65697878, -0.14177968, 0.6323136, -1.83416353, 2.11347714, -0.60475937]) # tvec, rvec
 
     # (3) Refine with bundle adjustment
     optimized_pose = optimize_fixed_camera_pose(initial_pose, observations, robot_poses)

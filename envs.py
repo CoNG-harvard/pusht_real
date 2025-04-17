@@ -114,6 +114,7 @@ class PushTRealEnv(object):
         # use legacy RandomState for compatibility
 
         self.goal_pose = np.array([256, 256, 0.]) # np.pi/4
+        # self.goal_pose = np.array([342, 270, 2.1])
         self._setup(shape_type=shape_type)
         if self.block_cog is not None:
             self.block.center_of_gravity = self.block_cog

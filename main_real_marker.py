@@ -20,6 +20,8 @@ from pathlib import Path
 import jax
 from relax.utils.persistence import PersistFunction
 import pickle
+from utils.rot_utils import rodrigues_to_matrix
+from utils.kalman_filter import get_kalman_filter
 
 import pygame
 from envs import PushTRealEnv
@@ -32,8 +34,10 @@ center = np.array([-0.151 - 0.25, -0.125 - 0.25])
 # distortionCoeffs = np.load(osp.join(pkg_dir, "distortions.npy"))
 
 # camera_tcp = [-0.05785834, 0.01470036, 0.02680225, -0.19765198, 0.15008495, -1.55158033, ]
-camera_tcp = [-0.07119155, 0.03392638, 0.0302255, -0.20909042, 0.21550955, -1.53705897]
 
+# tvec, rvec
+fixed_camera_pose = [-0.65697878, -0.14177968,  0.6323136, -1.83416353,  2.11347714, -0.60475937] 
+camera_tcp = [-0.07119155, 0.03392638, 0.0302255, -0.20909042, 0.21550955, -1.53705897]
 rod_tcp = [0.0, 0.0, 0.2002, 0.0, 0.0, -1.57079633]
 
 # Create pipeline
@@ -52,6 +56,8 @@ red_upper = np.array([255, 50, 50])  # Upper bound for red
 rtde_c = rtde_control.RTDEControlInterface("192.168.1.10")
 rtde_r = rtde_receive.RTDEReceiveInterface("192.168.1.10")
 rtde_c.setTcp(camera_tcp)
+
+kalman = get_kalman_filter()
 
 
 def move_real_speed(rtde_c,rtde_r, d):
@@ -75,39 +81,18 @@ def move_real_speed(rtde_c,rtde_r, d):
                          0.2, #look_ahead time
                          350 # gain
                          )
-    # return rtde_c.moveL(target_pose, 
-    #                      np.linalg.norm(d), # speed
-    #                      )
-    # return rtde_c.speedL(target_pose, 
-    #                      np.linalg.norm(d), # speed
-    #                      )
-
-
-def move_to_markers(rtde_c, rtde_r, marker_world, dist=0.05,):
-    marker_tvec_world, marker_rvec_world = marker_world[:3], marker_world[3:]
-    rtde_c.setTcp(rod_tcp)
-    R, _ = cv2.Rodrigues(np.array(marker_rvec_world))
-    z = R[:, -1]
-    x = R[:, 0]
-    y = R[:, 1]
-    print(z)
-    target_pose = marker_tvec_world + z * 0.05 + x * 0.07 + y * - 0.07
-    print(target_pose)
-    current_pose = rtde_r.getActualTCPPose()
     
-    current_pose[0] = target_pose[0]
-    current_pose[1] = target_pose[1]
-    current_pose[2] = target_pose[2]
-    rot_vec = get_z_inverted_rotvec(marker_world)
-    current_pose[3] = rot_vec[0]
-    current_pose[4] = rot_vec[1]
-    current_pose[5] = rot_vec[2]
-    rtde_c.moveL(current_pose, speed=0.05)
-    rtde_c.setTcp(camera_tcp)
+def pose_tran_fixed_camera(marker_rvec, marker_tvec, fixed_cam_pose):
+    T_marker_to_camera = rodrigues_to_matrix(marker_rvec, marker_tvec)
+    fixed_cam_pose = np.array(fixed_cam_pose)
+    fixed_cam_rvec, fxied_cam_tvec = fixed_cam_pose[3:], fixed_cam_pose[:3]
+    T_camera_to_world = rodrigues_to_matrix(fixed_cam_rvec, fxied_cam_tvec)
+    T_marker_to_world = T_camera_to_world @ T_marker_to_camera
+    R = T_marker_to_world[:3, :3]
+    tvec = T_marker_to_world[:3, 3]
+    rvec = cv2.Rodrigues(R)[0]
+    return np.concatenate([tvec, rvec.flatten()])
     
-def make_contact(rtde_c):
-    speed = [0, 0, -0.009, 0, 0, 0]
-    rtde_c.moveUntilContact(speed, acceleration=0.1)
     
 def marker_to_pose(marker_world):
     marker_tvec_world, marker_rvec_world = marker_world[:3], marker_world[3:]
@@ -115,7 +100,6 @@ def marker_to_pose(marker_world):
     z = R[:, -1]
     x = R[:, 0]
     y = R[:, 1]
-    print(np.arctan2(R[1, 0], R[0, 0]))
     target_pos = marker_tvec_world + 0.026 * y
     yaw = np.arctan2(R[1, 0], R[0, 0])
     return np.array([target_pos[0], target_pos[1], - yaw])
@@ -220,6 +204,8 @@ with open(policy_root / policy_path, "rb") as f:
     
 ## warm up
 policy_fn(policy_params, np.zeros((10)))
+kalman_initialized = False
+last_rot = None
 
 try:
     while True:
@@ -246,9 +232,30 @@ try:
         
         (found, color_image, marker) = markerReader.detectMarkers(color_image, markerDict)
         
+        if found:
+            tvec = np.array(marker.tvec[0]) / 1000
+            rvec = np.array(marker.rvec[0])
+            marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
+            tblk_env = marker_to_env(marker_world)
+            # if not kalman_initialized:
+            #     kalman.statePost = np.array([[tblk_env[0]], [tblk_env[1]], [tblk_env[2]], [0], [0], [0]], dtype=np.float32)
+            #     kalman_initialized = True
+            # else:
+            if last_rot is None:
+                last_rot = tblk_env[2]
+            else:
+                if np.abs(tblk_env[2] - last_rot)>0.5: # handling noise
+                    pass
+                else:
+                    measurement = np.array([[tblk_env[0]], [tblk_env[1]], [tblk_env[2]]], dtype=np.float32)
+                    kalman.correct(measurement)
+                    last_rot = tblk_env[2]
+                
+            # marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
+            predicted = kalman.predict().flatten()
+            obs, _ = env.reset(predicted[:3], get_agent_env_pos(rtde_r, rtde_c))
+            env.render()
         
-        tvec = np.array(marker.tvec[0]) / 1000
-        rvec = np.array(marker.rvec[0])
 
         # Show images
         cv2.imshow('RealSense Color', color_image)
@@ -272,10 +279,15 @@ try:
         #     if marker_world is not None:
         #         make_contact(rtde_c)
         if key == ord('r'):
-            marker_world = rtde_c.poseTrans(rtde_r.getActualTCPPose(), 
-                                    np.concatenate([tvec, rvec]))
-            obs, _ = env.reset(marker_to_env(marker_world), get_agent_env_pos(rtde_r, rtde_c))
-            env.render()
+            # on arm camera
+            # marker_world = rtde_c.poseTrans(rtde_r.getActualTCPPose(), 
+            #                         np.concatenate([tvec, rvec]))
+            # fixed camera
+            if found:
+                marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
+                predicted = kalman.predict().flatten()
+                obs, _ = env.reset(predicted[:3], get_agent_env_pos(rtde_r, rtde_c))
+                env.render()
             
         if key == ord('s'):
             if obs is None:
@@ -305,14 +317,14 @@ try:
             move_to_higher_center(rtde_c, rtde_r)
         if key == ord('b'):
             move_to_lower_push(rtde_c, rtde_r)
-        if key == ord('i'):
-            rotate_camera(rtde_c, rtde_r, "w")
-        if key == ord('j'):
-            rotate_camera(rtde_c, rtde_r, "a")
-        if key == ord('k'):
-            rotate_camera(rtde_c, rtde_r, "s")
-        if key == ord('l'):
-            rotate_camera(rtde_c, rtde_r, "d")
+        # if key == ord('i'):
+        #     rotate_camera(rtde_c, rtde_r, "w")
+        # if key == ord('j'):
+        #     rotate_camera(rtde_c, rtde_r, "a")
+        # if key == ord('k'):
+        #     rotate_camera(rtde_c, rtde_r, "s")
+        # if key == ord('l'):
+        #     rotate_camera(rtde_c, rtde_r, "d")
             # print(marker.tvec)
             # print(marker.rvec)
         # Break loop on 'q' key press

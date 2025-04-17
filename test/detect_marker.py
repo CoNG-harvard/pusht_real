@@ -21,6 +21,7 @@ pipeline = rs.pipeline()
 
 # Configure the pipeline
 config = rs.config()
+config.enable_device('126122270638')  # Replace with your camera's serial numbers
 config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
 config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
 
@@ -72,26 +73,19 @@ try:
         
         # parameters = cv2.aruco.DetectorParameters()
         markerDict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT["DICT_4X4_50"])
-        # detector = cv2.aruco.ArucoDetector(markerDict, parameters)
-        # corners, ids, _ = detector.detectMarkers(color_image)
-        # print(ids)
-
-        
-        markerId=0
         
         marker = Marker()        
         markerReader = MarkerReader(markerId, 
                                     markerDict, 
                                     40, cameraMatrix, distortionCoeffs)
         (found, color_image, marker) = markerReader.detectMarkers(color_image, markerDict)
-        # print(marker.tvec)
-        # print(marker.rvec)
-        # [[ 99.94102727 -67.27201299 177.3208064 ]]
-        # [[-2.86820071  0.85956114  0.13403713]]
+        if found:
+            print(markerReader.ids)
+            print(marker.tvec[0])
 
         # Show images
-        cv2.imshow('RealSense Color', color_image)
-        cv2.imshow('RealSense Depth', depth_image)
+        cv2.imshow('RealSense', color_image)
+        # cv2.imshow('RealSense Depth', depth_image)
 
         # Break loop on 'q' key press
         if cv2.waitKey(1) & 0xFF == ord('q'):

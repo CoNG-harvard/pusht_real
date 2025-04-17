@@ -5,6 +5,8 @@ import cv2.aruco
 import numpy as np
 import os.path as osp
 import math
+import time
+from scipy.spatial.transform import Rotation as R
 
 ARUCO_DICT = {
                 "DICT_4X4_50": cv2.aruco.DICT_4X4_50,
@@ -107,6 +109,7 @@ class MarkerReader():
         if len(allCorners) > 0:
             self.marker = Marker()
             self.nbMarkers=0
+            self.ids = ids
             for i in range(0, len(ids)):
                 
                 (topLeft, topRight, bottomRight, bottomLeft) = allCorners[i].reshape((4, 2))
@@ -199,3 +202,35 @@ class MarkerReader():
         # Draw predicted position and orientation (red)
         cv2.circle(img, pred_2d, 5, (0, 0, 255), -1)
         draw_arrow(img, pred_2d, pred_theta, length=50, color=(0, 0, 255), thickness=2)
+        
+        
+def get_average_rot_tran(markerReader, markerDict, pipeline, num=30):
+    rotmats = []
+    tvecs = []
+    while len(rotmats) < num:
+        frames = pipeline.wait_for_frames()
+        # depth_frame = frames.get_depth_frame()
+        color_frame = frames.get_color_frame()
+        if not color_frame:
+            continue
+        color_image = np.asanyarray(color_frame.get_data())
+        (found, color_image, marker) = markerReader.detectMarkers(color_image, markerDict)
+        rot_mat = R.from_rotvec(marker.rvec[0]).as_matrix()
+        rotmats.append(rot_mat)
+        tvecs.append(marker.tvec[0])
+        time.sleep(0.03)
+    rot_mat_avg = np.mean(np.array(rotmats), axis=0)
+    tvec_avg = np.mean(np.array(tvecs), axis=0)
+
+    # Step 2: Use SVD to project the mean matrix back onto SO(3)
+    U, _, Vt = np.linalg.svd(rot_mat_avg)
+    R_avg = U @ Vt
+
+    # Ensure it's a valid rotation matrix (det(R) = +1)
+    if np.linalg.det(R_avg) < 0:
+        U[:, -1] *= -1
+        R_avg = U @ Vt
+
+    # Convert back to rotation vector
+    rot_vec_avg = R.from_matrix(R_avg).as_rotvec()
+    return rot_vec_avg, tvec_avg
