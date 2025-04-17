@@ -8,7 +8,7 @@ class TBlockTracker:
     color_l = np.array([90, 10, 10])
 
     def __init__(self, template_len=4, template_scale=30, template_w=180, template_h=180,
-                 template_rot_angle_step=1, allowed_angle_diff_per_frame=24, mode='bgr'):
+                 template_rot_angle_step=1, allowed_angle_diff_per_frame=60, mode='bgr'):
         self.temp_img, self.temp_pts, self.temp_keypoint = generate_template(length=template_len, 
                                                                              scale=template_scale, 
                                                                              w=template_w, 
@@ -35,26 +35,33 @@ class TBlockTracker:
     
     def detect_block_pose(self, image, morph_sz=11, use_kf=True):
         if self.first:
+            self.score = 0.0
             angle_last = 180
             allowed_ang_diff = 180
         else:
             angle_last = self.curr_ang
             allowed_ang_diff = self.allowed_angle_diff_per_frame
 
-        self.curr_pos, self.curr_ang = self.detect_block_pose_single(image, morph_sz=morph_sz, 
-                                                                     angle_last=angle_last, allowed_ang_diff=allowed_ang_diff)
-        if use_kf and self.curr_pos is not None:
+        score, curr_pos, curr_ang = self.detect_block_pose_single(image, morph_sz=morph_sz, 
+                                                                            angle_last=angle_last, allowed_ang_diff=allowed_ang_diff)
+        if use_kf:
+            meas = np.array([curr_pos[0], curr_pos[1], curr_ang], dtype=np.float32)
             if self.first:
-                init = np.array([self.curr_pos[0], self.curr_pos[1], self.curr_ang, 0, 0, 0 ], dtype=np.float32)
+                init = np.concatenate([meas, [0, 0, 0]])
                 self.kf = get_kalman_filter(init_state=init, dt=1)
             else:
                 self.kf.predict()
-                self.kf.correct(np.array([self.curr_pos[0], self.curr_pos[1], self.curr_ang], dtype=np.float32))
-                self.curr_pos = np.array([self.kf.statePost[0], self.kf.statePost[1]], dtype=np.int32)
-                self.curr_ang = self.kf.statePost[2]
+                self.kf.correct(meas)
+                curr_pos = np.array([self.kf.statePost[0], self.kf.statePost[1]], dtype=np.float32)
+                curr_ang = self.kf.statePost[2]
+
+        if (self.score - score < 0.35):
+            self.curr_pos = curr_pos
+            self.curr_ang = curr_ang
+            self.score = score
         
         self.first = False
-        return self.curr_pos, int(self.curr_ang)
+        return self.score, self.curr_pos.astype(np.int32), self.curr_ang
 
     def detect_block_pose_single(self, image, morph_sz=11, angle_last=180, allowed_ang_diff=180):
         if self.mode == 'bgr':
@@ -63,8 +70,12 @@ class TBlockTracker:
             color_u, color_l = self.color_u, self.color_l
 
         temp_dct = {k: v for k, v in self.temp_dct.items() if 
-                    (k-angle_last) % 360 <= allowed_ang_diff or (angle_last - k) % 360 <= allowed_ang_diff}
-        results = match_template_bank(image, temp_dct, color_u, color_l, morph_sz=morph_sz)
+                    ((k-angle_last) % 360 <= allowed_ang_diff) or ((angle_last - k) % 360 <= allowed_ang_diff)}
+        try:
+            results = match_template_bank(image, temp_dct, color_u, color_l, morph_sz=morph_sz, use_bb=True)
+        except:
+            results = match_template_bank(image, temp_dct, color_u, color_l, morph_sz=morph_sz, use_bb=False)
+
         if len(results) == 0:
             return None
         
@@ -75,9 +86,10 @@ class TBlockTracker:
         kpx, kpy = keypoint
         kpx = kpx + y
         kpy = kpy + x
-        return np.array([kpx, kpy]), best_result['angle']
+        return best_result['score'], np.array([kpx, kpy]), best_result['angle']
     
-def match_template_bank(image, temp_dct, color_u, color_l, mask_thk=80, morph_sz=11, method=cv2.TM_CCOEFF_NORMED):
+def match_template_bank(image, temp_dct, color_u, color_l, mask_thk=80, 
+                        morph_sz=11, method=cv2.TM_CCOEFF_NORMED, use_bb=True):
 
     mask = np.all((color_l <= image) & (image <= color_u), axis=-1).astype(np.uint8)
     kernel = np.ones((morph_sz, morph_sz), np.uint8)
@@ -85,18 +97,20 @@ def match_template_bank(image, temp_dct, color_u, color_l, mask_thk=80, morph_sz
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
     results = []
-    x, y, wb, hb = cv2.boundingRect(mask.astype(np.uint8))
 
-    h, w = mask.shape
-    start_y, start_x = max(0, y-mask_thk), max(0, x-mask_thk)
-    end_y, end_x = min(h, y+hb+mask_thk), min(w, x+wb+mask_thk)
-    mask = mask[start_y: end_y, start_x: end_x]
-
-    start = np.array([start_x, start_y])
+    if use_bb:
+        h, w = mask.shape
+        x, y, wb, hb = cv2.boundingRect(mask.astype(np.uint8))
+        start_y, start_x = max(0, y-mask_thk), max(0, x-mask_thk)
+        end_y, end_x = min(h, y+hb+mask_thk), min(w, x+wb+mask_thk)
+        mask = mask[start_y: end_y, start_x: end_x]
+        start = np.array([start_x, start_y])
+        
     for angle, (template, _, _) in temp_dct.items():
         res = cv2.matchTemplate(mask, template, method)
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-        max_loc += start
+        if use_bb:
+            max_loc += start
 
         score = max_val if method in [
             cv2.TM_CCOEFF, cv2.TM_CCOEFF_NORMED] else -min_val
@@ -157,7 +171,7 @@ def get_kalman_filter(init_state, dt=1):
     # 6 state vars: x, y, θ, dx, dy, dθ; 3 measurements: x, y, θ
     kf = cv2.KalmanFilter(6, 3)
 
-    kf.statePost = init_state
+    kf.statePost = init_state.astype(np.float32)
 
     # Transition matrix (constant velocity model)
     kf.transitionMatrix = np.array([

@@ -1,4 +1,3 @@
-from utils.tblock_tracker import TBlockTracker
 import pyrealsense2 as rs
 import numpy as np
 import cv2
@@ -13,12 +12,18 @@ pkg_dir = osp.dirname(osp.dirname(__file__))
 import sys
 sys.path.append(pkg_dir)
 print(pkg_dir)
-from utils.marker_util import Marker, ARUCO_DICT
+from utils.marker_util import Marker, MarkerReader, ARUCO_DICT
 from utils.rot_utils import get_z_inverted_rotvec
 from utils.robot_control import move_z
 import time
+from PIL import Image
 
 import pygame
+import datetime
+import pickle
+import os
+from utils.tblock_tracker import TBlockTracker
+
 
 window_size = 512
 
@@ -109,10 +114,19 @@ marker_world = None
 markerId=0
 markerDict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT["DICT_4X4_50"])
 marker = Marker()        
-tracker = TBlockTracker()
+markerReader = MarkerReader(markerId, markerDict, 38, cameraMatrix, distortionCoeffs)
 
 window = None
-thk = 5
+
+folder = 'images'
+
+tracker = TBlockTracker()
+
+
+if not os.path.exists(f'{folder}/intrinsic.pkl'):
+    with open(f'{folder}/intrinsic.pkl', 'wb') as f:
+        pickle.dump({'cameraMatrix':cameraMatrix, 'distortionCoeffs': distortionCoeffs}, f)
+
 try:
     while True:
         # Wait for a coherent pair of frames: depth and color
@@ -136,13 +150,21 @@ try:
         # corners, ids, _ = detector.detectMarkers(color_image)
         # print(ids)
         
-        if res := tracker.detect_block_pose(color_image, use_kf=True):
+        color_image_orig = color_image.copy()
+        
+            
+        (found, color_image_marked, marker) = markerReader.detectMarkers(color_image, markerDict)
+        
+        thk = 5
+        if res := tracker.detect_block_pose_single(color_image_orig):
             score, pos, orient = res
-            color_image[pos[0]-thk:pos[0]+thk, pos[1]-thk:pos[1]+thk] = [0, 255, 0]
-            #color_image[pos_kf[0]-thk:pos_kf[0]+thk, pos_kf[1]-thk:pos_kf[1]+thk] = [255, 0, 0]
+            color_image_marked[pos[0]-thk:pos[0]+thk, pos[1]-thk:pos[1]+thk] = [0, 255, 0]
+        
+        tvec = np.array(marker.tvec[0]) / 1000
+        rvec = np.array(marker.rvec[0])
 
         # Show images
-        cv2.imshow('RealSense Color', color_image)
+        cv2.imshow('RealSense Color', color_image_marked)
         # cv2.imshow('RealSense Depth', depth_image)
         
         key = cv2.waitKey(1) & 0xFF
@@ -152,7 +174,23 @@ try:
             pygame.display.init()
             window = pygame.display.set_mode(
                 (window_size, window_size))
+        
+        if key == ord('s'):
+            print('saving')
+            name = folder + '/' + str(datetime.datetime.now())
+            img = Image.fromarray(color_image_orig, 'RGB')
+            img.save(name + '.png')
+            cv2.imwrite(name + '-depth.png', depth_image)
 
+            
+            if found:    
+                img_marked = Image.fromarray(color_image_marked, 'RGB')
+                img_marked.save(name+'-marked.png')
+                with open(name+'-vecs.pkl', 'wb') as f:
+                    pickle.dump({'rvec':rvec, 'tvec': tvec}, f)
+            else:
+                print('couldnt find marker')
+            
         if key == ord('q'):
             break
 finally:
