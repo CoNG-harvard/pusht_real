@@ -6,13 +6,19 @@ class TBlockTracker:
     # hardcoded color limits..
     color_u = np.array([220, 80, 80])
     color_l = np.array([90, 10, 10])
+    # harcoded real scale
+    real_scale = 0.5
 
-    def __init__(self, template_len=4, template_scale=30, template_w=180, template_h=180,
+    def __init__(self, template_scale=30, template_w=180, template_h=180,
                  template_rot_angle_step=1, allowed_angle_diff_per_frame=60, mode='bgr'):
-        self.temp_img, self.temp_pts, self.temp_keypoint = generate_template(length=template_len, 
-                                                                             scale=template_scale, 
+        self.temp_img, self.temp_pts, self.temp_keypoint = generate_template(scale=template_scale, 
                                                                              w=template_w, 
                                                                              h=template_h)
+        # hardcoded
+        self.temp_pts_real, self.temp_keypoint_real = get_template_pts(scale=self.real_scale)
+        # 3d space
+        self.temp_pts_real = np.concatenate([self.temp_pts_real, np.zeros((self.temp_pts_real.shape[0], 1))], axis=1)
+        
         self.allowed_angle_diff_per_frame = allowed_angle_diff_per_frame
         self.template_rot_angle_step = template_rot_angle_step
         self.mode = mode
@@ -33,7 +39,7 @@ class TBlockTracker:
             angles, zip(template_bank, keypoints_all, rotated_pts_all))}
         return temp_dct
     
-    def detect_block_pose(self, image, morph_sz=11, use_kf=True):
+    def detect_block_pose(self, image, morph_sz=11):
         if self.first:
             self.score = 0.0
             angle_last = 180
@@ -42,26 +48,19 @@ class TBlockTracker:
             angle_last = self.curr_ang
             allowed_ang_diff = self.allowed_angle_diff_per_frame
 
-        score, curr_pos, curr_ang = self.detect_block_pose_single(image, morph_sz=morph_sz, 
-                                                                            angle_last=angle_last, allowed_ang_diff=allowed_ang_diff)
-        if use_kf:
-            meas = np.array([curr_pos[0], curr_pos[1], curr_ang], dtype=np.float32)
-            if self.first:
-                init = np.concatenate([meas, [0, 0, 0]])
-                self.kf = get_kalman_filter(init_state=init, dt=1)
-            else:
-                self.kf.predict()
-                self.kf.correct(meas)
-                curr_pos = np.array([self.kf.statePost[0], self.kf.statePost[1]], dtype=np.float32)
-                curr_ang = self.kf.statePost[2]
+        score, curr_pts, curr_kp, curr_ang = self.detect_block_pose_single(image, morph_sz=morph_sz, 
+                                                                           angle_last=angle_last, 
+                                                                           allowed_ang_diff=allowed_ang_diff)
+        
 
         if (self.score - score < 0.35):
-            self.curr_pos = curr_pos
+            self.curr_pts = curr_pts
+            self.curr_kp = curr_kp
             self.curr_ang = curr_ang
             self.score = score
         
         self.first = False
-        return self.score, self.curr_pos.astype(np.int32), self.curr_ang
+        return self.score, self.curr_pts.astype(np.int32), self.curr_kp.astype(np.int32), self.curr_ang
 
     def detect_block_pose_single(self, image, morph_sz=11, angle_last=180, allowed_ang_diff=180):
         if self.mode == 'bgr':
@@ -82,11 +81,10 @@ class TBlockTracker:
         best_result = max(results, key=lambda x: x["score"])
         x, y = best_result['top_left']
 
-        _, _, keypoint = self.temp_dct[best_result['angle']]
-        kpx, kpy = keypoint
-        kpx = kpx + y
-        kpy = kpy + x
-        return best_result['score'], np.array([kpx, kpy]), best_result['angle']
+        _, pts, keypoint = self.temp_dct[best_result['angle']]
+        keypoint = keypoint + np.array([x, y])
+        pts = pts + np.array([x, y])
+        return best_result['score'], pts, keypoint, best_result['angle']
     
 def match_template_bank(image, temp_dct, color_u, color_l, mask_thk=80, 
                         morph_sz=11, method=cv2.TM_CCOEFF_NORMED, use_bb=True):
@@ -122,17 +120,24 @@ def match_template_bank(image, temp_dct, color_u, color_l, mask_thk=80,
         })
     return results
 
-
-def generate_template(length=4, scale=30, w=200, h=200):
-    length *= scale
-
-    tlx, tly = (h - length) / 2, (w - length) / 2
+def get_template_pts(scale=0.5):
+    length = 4*scale
     dl = (length - scale) / 2
-    pts = np.array([[tlx, tly], [tlx + length, tly],
-                          [tlx + length, tly + scale], [tlx + length - dl, tly + scale],
-                          [tlx + length - dl, tly + length], [tlx + dl, tly + length],
-                          [tlx + dl, tly + scale], [tlx, tly + scale]])
-    kp = np.array([tly + scale / 2, tlx + length / 2], dtype=np.int32)
+    pts = np.array([[0, 0], [length, 0],
+                    [length, scale], [length - dl, scale],
+                    [length - dl, length], [dl, length],
+                    [dl, scale], [0, scale]], dtype=np.float32)
+    kp = np.array([length / 2, scale / 2], dtype=np.float32)
+    return pts, kp
+
+def generate_template(scale=30, w=200, h=200):
+    pts, kp = get_template_pts(scale=scale)
+    length = 4*scale
+    tlx, tly = (h - length) / 2, (w - length) / 2
+    
+    pts += np.array([tlx, tly])
+    kp += np.array([tlx, tly])
+
     template = np.zeros((w, h))
     template = cv2.fillPoly(
         template, [pts.astype(np.uint64)], color=255)
@@ -148,13 +153,10 @@ def rotate_image(image, pts, keypoint, angle):
     rotated = cv2.warpAffine(
         image, M, (w, h), flags=cv2.INTER_NEAREST).astype(np.uint8)
 
-    Minv = cv2.getRotationMatrix2D(center, -angle, 1.0)
-    keypoint = Minv @ np.array([keypoint[0], keypoint[1], 1])
-    keypoint = keypoint.astype(np.int32)
+    keypoint = M @ np.array([keypoint[0], keypoint[1], 1])
 
     pts = np.hstack((pts, np.ones((pts.shape[0], 1))))
     rotated_pts = pts @ M.T
-    rotated_pts = rotated_pts.astype(np.int32)
 
     return rotated, rotated_pts, keypoint
 

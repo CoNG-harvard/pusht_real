@@ -136,9 +136,14 @@ try:
         # corners, ids, _ = detector.detectMarkers(color_image)
         # print(ids)
         
-        if res := tracker.detect_block_pose(color_image, use_kf=True):
-            score, pos, orient = res
-            color_image[pos[0]-thk:pos[0]+thk, pos[1]-thk:pos[1]+thk] = [0, 255, 0]
+        if res := tracker.detect_block_pose(color_image):
+            score, pts, kp, orient = res
+            retval, rvec, tvec = cv2.solvePnP(tracker.temp_pts_real, 
+                                              pts.astype(np.float32), 
+                                              cameraMatrix, 
+                                              distortionCoeffs, 
+                                              flags=cv2.SOLVEPNP_ITERATIVE)
+            color_image = cv2.drawFrameAxes(color_image, cameraMatrix, distortionCoeffs, rvec, tvec, 1)
             #color_image[pos_kf[0]-thk:pos_kf[0]+thk, pos_kf[1]-thk:pos_kf[1]+thk] = [255, 0, 0]
 
         # Show images

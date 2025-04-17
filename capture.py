@@ -152,13 +152,15 @@ try:
         
         color_image_orig = color_image.copy()
         
-            
         (found, color_image_marked, marker) = markerReader.detectMarkers(color_image, markerDict)
         
         thk = 5
         if res := tracker.detect_block_pose_single(color_image_orig):
-            score, pos, orient = res
-            color_image_marked[pos[0]-thk:pos[0]+thk, pos[1]-thk:pos[1]+thk] = [0, 255, 0]
+            score, pts, kp, orient = res
+            pts, kp = pts.astype(int), kp.astype(int)
+            color_image_marked[kp[1]-thk:kp[1]+thk, kp[0]-thk:kp[0]+thk] = [255, 0, 0]
+            for px, py in pts:
+                color_image_marked[py-thk:py+thk, px-thk:px+thk] = [0, 255, 0]
         
         tvec = np.array(marker.tvec[0]) / 1000
         rvec = np.array(marker.rvec[0])
