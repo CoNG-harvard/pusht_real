@@ -52,8 +52,11 @@ pipeline = rs.pipeline()
 
 # Configure the pipeline
 config = rs.config()
-config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+#config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+#config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+
+config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
+config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
 
 
 # Define the red color range in RGB
@@ -97,6 +100,7 @@ profile = pipeline.start(config)
 # Get stream profile and camera intrinsics
 color_stream = profile.get_stream(rs.stream.color)  # Get color stream
 intr = color_stream.as_video_stream_profile().get_intrinsics()
+print(intr.coeffs)
 
 # Print camera matrix and distortion coefficients
 cameraMatrix = np.array([
@@ -122,7 +126,7 @@ folder = 'images'
 
 tracker = TBlockTracker()
 
-
+os.makedirs(folder, exist_ok=True)
 if not os.path.exists(f'{folder}/intrinsic.pkl'):
     with open(f'{folder}/intrinsic.pkl', 'wb') as f:
         pickle.dump({'cameraMatrix':cameraMatrix, 'distortionCoeffs': distortionCoeffs}, f)
@@ -155,7 +159,7 @@ try:
         (found, color_image_marked, marker) = markerReader.detectMarkers(color_image, markerDict)
         
         thk = 5
-        if res := tracker.detect_block_pose_single(color_image_orig):
+        if False and (res := tracker.detect_block_pose_single(color_image_orig)):
             score, pts, kp, orient = res
             pts, kp = pts.astype(int), kp.astype(int)
             color_image_marked[kp[1]-thk:kp[1]+thk, kp[0]-thk:kp[0]+thk] = [255, 0, 0]
@@ -166,7 +170,7 @@ try:
         rvec = np.array(marker.rvec[0])
 
         # Show images
-        cv2.imshow('RealSense Color', color_image_marked)
+        cv2.imshow('RealSense Color', color_image)
         # cv2.imshow('RealSense Depth', depth_image)
         
         key = cv2.waitKey(1) & 0xFF

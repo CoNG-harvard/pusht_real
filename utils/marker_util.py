@@ -142,6 +142,28 @@ class MarkerReader():
         
         return False, image, self.marker
     
+    def detectMarkers2(self, img, dictionary):
+        image = img.copy()
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        cv2.aruco_dict = dictionary
+        parameters = cv2.aruco.DetectorParameters_create()
+        # global arucoParams
+        
+        (allCorners, ids, rejected) = cv2.aruco.detectMarkers(gray, dictionary, parameters=arucoParams,
+                                                                    # cameraMatrix=self.cameraMatrix,
+                                                                    # distCoeff=self.distortionCoeffs
+                                                                    )
+        # allCorners, ids, _ = self.detector.detectMarkers(img)
+        if len(allCorners) > 0:
+            rvecs, tvecs, objPoints = cv2.aruco.estimatePoseSingleMarkers(allCorners,
+                                                                              self.markerSize,
+                                                                              cameraMatrix=self.cameraMatrix,
+                                                                              distCoeffs=self.distortionCoeffs)
+            cv2.aruco.drawDetectedMarkers(image, allCorners) 
+            return image, ids, rvecs, tvecs, objPoints, allCorners
+        
+        return None
+    
     def drawMarkers(self, img, aruco_dict_type, matrix_coefficients, distortion_coefficients):
 
         frame = img.copy()

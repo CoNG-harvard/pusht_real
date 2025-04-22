@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.spatial.transform import Rotation as R
+import cv2
 
 def average_rotations(rotation_vectors):
     # # Assume you have a list of rotation vectors (N x 3)
@@ -58,3 +59,12 @@ def get_z_inverted_rotvec(marker_world):
 
     return rotation_vector
 
+
+
+def rodrigues_to_matrix(rvec, tvec):
+    """Convert Rodrigues rotation vector to 4x4 transformation matrix."""
+    R, _ = cv2.Rodrigues(rvec)
+    T = np.eye(4)
+    T[:3, :3] = R
+    T[:3, 3] = tvec.flatten()
+    return T

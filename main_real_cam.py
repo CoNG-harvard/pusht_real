@@ -50,6 +50,10 @@ config = rs.config()
 config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
 config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
 
+#config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
+#config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
+
+
 
 # Define the red color range in RGB
 red_lower = np.array([100, 0, 0])  # Lower bound for red (R > 100, G < 50, B < 50)
