@@ -21,9 +21,9 @@ pipeline = rs.pipeline()
 
 # Configure the pipeline
 config = rs.config()
-config.enable_device('126122270638')  # Replace with your camera's serial numbers
-config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+config.enable_device('233722070172')  # Replace with your camera's serial numbers 126122270638
+config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
+config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
 
 
 # Define the red color range in RGB
@@ -31,14 +31,14 @@ red_lower = np.array([100, 0, 0])  # Lower bound for red (R > 100, G < 50, B < 5
 red_upper = np.array([255, 50, 50])  # Upper bound for red
 
 
-# Create pipeline
-pipeline = rs.pipeline()
+# # Create pipeline
+# pipeline = rs.pipeline()
 
-# Configure the pipeline
-config = rs.config()
-config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-markerId=0
+# # Configure the pipeline
+# config = rs.config()
+# config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+# config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+markerId=1
 
 profile = pipeline.start(config)
 # Get stream profile and camera intrinsics
