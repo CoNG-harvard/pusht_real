@@ -1,6 +1,7 @@
 import pickle
 import cv2
 import numpy as np
+from sklearn.cluster import KMeans
 
 class TBlockTracker:
     # hardcoded color limits..
@@ -62,7 +63,7 @@ class TBlockTracker:
         self.first = False
         return self.score, self.curr_pts.astype(np.int32), self.curr_kp.astype(np.int32), self.curr_ang
 
-    def detect_block_pose_single(self, image, morph_sz=11, angle_last=180, allowed_ang_diff=180):
+    def detect_block_pose_single(self, image, angle_last=180, allowed_ang_diff=180):
         if self.mode == 'bgr':
             color_u, color_l = self.color_u[::-1], self.color_l[::-1]
         else:
@@ -71,9 +72,9 @@ class TBlockTracker:
         temp_dct = {k: v for k, v in self.temp_dct.items() if 
                     ((k-angle_last) % 360 <= allowed_ang_diff) or ((angle_last - k) % 360 <= allowed_ang_diff)}
         try:
-            results = match_template_bank(image, temp_dct, color_u, color_l, morph_sz=morph_sz, use_bb=True)
+            results = match_template_bank(image, temp_dct, color_u, color_l, use_bb=True)
         except:
-            results = match_template_bank(image, temp_dct, color_u, color_l, morph_sz=morph_sz, use_bb=False)
+            results = match_template_bank(image, temp_dct, color_u, color_l, use_bb=False)
 
         if len(results) == 0:
             return None
@@ -86,13 +87,38 @@ class TBlockTracker:
         pts = pts + np.array([x, y])
         return best_result['score'], pts, keypoint, best_result['angle']
     
-def match_template_bank(image, temp_dct, color_u, color_l, mask_thk=80, 
-                        morph_sz=11, method=cv2.TM_CCOEFF_NORMED, use_bb=True):
+def match_template_bank(image, temp_dct, color_u, color_l, mask_thk=80, method=cv2.TM_CCOEFF_NORMED, use_bb=True):
 
+    # Find contours of the color
     mask = np.all((color_l <= image) & (image <= color_u), axis=-1).astype(np.uint8)
-    kernel = np.ones((morph_sz, morph_sz), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = tuple(
+        contour for contour in contours if cv2.contourArea(contour) > 500)
+    contours = tuple(cv2.approxPolyDP(contour, 1, True)
+                    for contour in contours)
+    mask = cv2.drawContours(
+        np.zeros(image.shape[:-1]), contours, -1, color=255, thickness=-1)
+    cpy = image.copy()
+    cpy[mask == 0] = 0
+
+    # surface clearing
+    red_mask = cpy[..., 0]
+    red_mask_flat = red_mask.flatten()
+    red_mask_flat = red_mask_flat[red_mask_flat > 0]
+    kmeans = KMeans(n_clusters=2).fit(red_mask_flat.reshape(-1, 1))
+    centers = kmeans.cluster_centers_.flatten()
+    mx, mn = (max(centers), min(centers))
+
+    diff1 = abs(red_mask - mx)
+    diff2 = abs(red_mask - mn)
+    top_surf = diff1 < diff2
+
+    kernel = np.ones((5, 5), np.uint8)
+    top_surf = cv2.morphologyEx(top_surf.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+    top_surf = cv2.morphologyEx(top_surf, cv2.MORPH_CLOSE, kernel)
+    mask = top_surf
+
 
     results = []
 

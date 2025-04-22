@@ -8,5 +8,7 @@ Work on depth information
 
 
 New ideas:
-    Option 1: I use template matching to get the location
-    Option 2: Directly use lines?
+    Homography
+    Write pipeline and then use
+        - Line based
+    Finally ML based...

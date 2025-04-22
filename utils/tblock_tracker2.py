@@ -37,9 +37,9 @@ class TBlockTracker:
         edges = cv2.Canny(gray, threshold1=30, threshold2=100)
         lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=50,
                                 minLineLength=1, maxLineGap=50)
-        lines = lines[:, 0]
         if lines is None:
             return None
+        lines = lines[:, 0]
         
         angles = np.array([np.arctan2(x2 - x1, y2 - y1) for (x1, y1, x2, y2) in lines])
         group1, group2 = [], []
