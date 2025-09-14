@@ -1,3 +1,9 @@
+"""
+Detect markers from the robot end effector camera and get the position of the marker in the world frame.
+Need robotic arm to be enabled.
+"""
+
+
 import pyrealsense2 as rs
 import numpy as np
 import cv2
@@ -12,7 +18,7 @@ pkg_dir = osp.dirname(osp.dirname(__file__))
 import sys
 sys.path.append(pkg_dir)
 print(pkg_dir)
-from utils.marker_util import Marker, MarkerReader, ARUCO_DICT
+from utils.marker_util import Marker, MarkerReader, ARUCO_DICT, get_average_rot_tran
 from utils.rot_utils import get_z_inverted_rotvec
 from utils.robot_control import move_z
 import time
@@ -34,7 +40,8 @@ seek_pose = [-0.27493117962596614,
  -0.0057063949190226,
  -0.16493417235262048]
 
-camera_tcp = [-0.05785834, 0.01470036, 0.02680225, -0.19765198, 0.15008495, -1.55158033, ]
+# camera_tcp = [-0.05785834, 0.01470036, 0.02680225, -0.19765198, 0.15008495, -1.55158033, ]
+camera_tcp = [-0.07119155, 0.03392638, 0.0302255, -0.20909042, 0.21550955, -1.53705897]
 rod_tcp = [0.0, 0.0, 0.2, 0.0, 0.0, 0.0]
 
 # Create pipeline
@@ -42,8 +49,8 @@ pipeline = rs.pipeline()
 
 # Configure the pipeline
 config = rs.config()
-config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
+config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
 
 
 
@@ -123,7 +130,7 @@ try:
         # print(ids)
 
         
-        markerId=0
+        markerId=1
         
         marker = Marker()        
         markerReader = MarkerReader(markerId, markerDict, 38, cameraMatrix, distortionCoeffs)
@@ -154,9 +161,10 @@ try:
                 
         if key == ord('p'):
             if found:
+                rvec, tvec = get_average_rot_tran(markerReader, markerDict, pipeline)
                 marker_world = rtde_c.poseTrans(rtde_r.getActualTCPPose(), 
-                                    np.concatenate([tvec, rvec]))
-                print("Found marker at", marker_world)
+                                    np.concatenate([tvec / 1000, rvec]))
+                print("Found marker at (tvec, rvec)", marker_world)
             # print(marker.tvec)
             # print(marker.rvec)
         # Break loop on 'q' key press

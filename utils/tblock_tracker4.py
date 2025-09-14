@@ -14,13 +14,20 @@ class TBlockTracker:
     # hardcoded color limits..
     color_u = np.array([250, 140, 85])
     color_l = np.array([90, 0, 0]) 
+    # harcoded real scale
+    real_scale = 50
 
     def __init__(self, mode='bgr'):
         self.mode = mode
+        temp_pts_real = get_template_pts(scale=self.real_scale)
+        self.temp_pts_real = np.concatenate([temp_pts_real, np.zeros((4, 1))], axis=1)
 
     def get_obj(self, img, min_cnt_area=1000):
         img = img.copy()
-        mask = np.all((self.color_l <= img) & (img <= self.color_u), axis=-1).astype(np.uint8)
+        if self.mode == 'bgr':
+            color_l = self.color_l[::-1]
+            color_u = self.color_u[::-1]
+        mask = np.all((color_l <= img) & (img <= color_u), axis=-1).astype(np.uint8)
         contours, _ = cv2.findContours(
             mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         contours = tuple(
@@ -72,25 +79,25 @@ class TBlockTracker:
             perc = percent_points_on_segment(obj_pts, l[:2], l[2:])
             if perc > 80:
                 # chosen line is at top
-                print('top, no symmetry')
+                #print('top, no symmetry')
                 top = True
                 rot_ang = ang_longest + np.pi/2
                 x = rot[:, 1]
             else:
-                print('stem, no symmetry')
+                #print('stem, no symmetry')
                 top = False
                 rot_ang = ang_longest
                 x = rot[:, 0]
         else:
             if sym1 < sym2:
                 # chosen line is at stem
-                print('top')
+                #print('top')
                 top = True
                 rot_ang = ang_longest + np.pi/2
                 x = rot[:, 1]
             else:
                 # chosen line is at top
-                print('stem')
+                #print('stem')
                 top = False
                 rot_ang = ang_longest
                 x = rot[:, 0]
@@ -214,6 +221,12 @@ class TBlockTracker:
 
             up = list(set(end_pts_y_arg[:end_mid]).intersection(set(beg_pts_y_arg[:beg_mid])))
             down = list(set(end_pts_y_arg[end_mid:]).intersection(set(beg_pts_y_arg[beg_mid:])))
+            if len(up) == 0:
+                print('not enough top-up lines')
+                return None
+            if len(down) == 0:
+                print('not enough top-down lines')
+                return None
 
             # get the original lines and the filtered lines
             up_orig = top_lines[up]
@@ -310,7 +323,7 @@ class TBlockTracker:
                         down = single[0]
                 else:
                     # both have >= 2 lines...
-                    sides, origs = []
+                    sides, origs = [], []
                     for down_side, down_side_orig in zip([down_left, down_right], [down_left_orig, down_right_orig]):
                         down_side_orig_lens = np.array([np.hypot((x2 - x1), (y2 - y1)) for (x1, y1, x2, y2) in down_side_orig])
                         filtr = down_side_orig_lens > min_len_top_down
@@ -390,7 +403,12 @@ class TBlockTracker:
             bl = get_intersection_point(down_l[:2], down_l[2:], stem_lines_filtered[0][:2], stem_lines_filtered[0][2:], extend=5)
             br = get_intersection_point(down_r[:2], down_r[2:], stem_lines_filtered[1][:2], stem_lines_filtered[1][2:], extend=5)
 
-        return np.array([tl, bl, br, tr])
+        return np.array([tl, tr, br, bl])
+
+
+def get_template_pts(scale=0.5):
+    pts = np.array([[0, 0], [scale, 0], [scale, scale], [0, scale]], dtype=np.float32)
+    return pts
 
 
 # ----------- Utility functions -----------

@@ -24,11 +24,13 @@ from utils.rot_utils import rodrigues_to_matrix
 from utils.kalman_filter import get_kalman_filter
 
 import pygame
+from utils.tblock_tracker4 import TBlockTracker
 from envs import PushTRealEnv
 
 window_size = 512
 
-center = np.array([-0.151 - 0.256, -0.125 - 0.256])
+center = np.array([-0.151 - 0.25, -0.125 - 0.25])
+home = np.array([-0.151 - 0.1, -0.125 - 0.1])
 
 # cameraMatrix = np.load(osp.join(pkg_dir, "cameraMatrix.npy"))
 # distortionCoeffs = np.load(osp.join(pkg_dir, "distortions.npy"))
@@ -36,10 +38,7 @@ center = np.array([-0.151 - 0.256, -0.125 - 0.256])
 # camera_tcp = [-0.05785834, 0.01470036, 0.02680225, -0.19765198, 0.15008495, -1.55158033, ]
 
 # tvec, rvec
-# fixed_camera_pose = [-0.65697878, -0.14177968,  0.6323136, -1.83416353,  2.11347714, -0.60475937] # first d405
-# fixed_camera_pose = [-0.61743599, -0.11876692,  0.60051386, -1.86847763,  2.24117025, -0.70505939] # second d435
-# Initial guess of fixed camera pose (rvec, tvec): [-1.89865708  2.27415181 -0.75866311] [-0.62384115 -0.12916752  0.59730634]
-fixed_camera_pose = [0.26809229, 0.68914486, 0.72160278, 0.28006889, -2.68845418, 0.14502297] # third d435
+fixed_camera_pose = [-0.61743599, -0.11876692,  0.60051386, -1.86847763,  2.24117025, -0.70505939] # second d435
 camera_tcp = [-0.07119155, 0.03392638, 0.0302255, -0.20909042, 0.21550955, -1.53705897]
 rod_tcp = [0.0, 0.0, 0.2002, 0.0, 0.0, -1.57079633]
 
@@ -50,17 +49,20 @@ pipeline = rs.pipeline()
 config = rs.config()
 config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
 config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
+#config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+#config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
 
 
 # Define the red color range in RGB
 red_lower = np.array([100, 0, 0])  # Lower bound for red (R > 100, G < 50, B < 50)
 red_upper = np.array([255, 50, 50])  # Upper bound for red
 
-rtde_c = rtde_control.RTDEControlInterface("192.168.0.191")
-rtde_r = rtde_receive.RTDEReceiveInterface("192.168.0.191")
+rtde_c = rtde_control.RTDEControlInterface("192.168.1.10")
+rtde_r = rtde_receive.RTDEReceiveInterface("192.168.1.10")
 rtde_c.setTcp(camera_tcp)
 
 kalman = get_kalman_filter()
+tracker = TBlockTracker()
 
 
 def move_real_speed(rtde_c,rtde_r, d):
@@ -145,7 +147,7 @@ def move_to_higher_center(rtde_c, rtde_r):
     
 def move_to_lower_push(rtde_c, rtde_r):
     rtde_c.setTcp(rod_tcp)
-    center_pose = [center[0], center[1], 0.03, -3.1415730563016435, 0, 0]
+    center_pose = [home[0], home[1], 0.03, -3.1415730563016435, 0, 0]
     rtde_c.moveL(center_pose, speed=0.05)
     
 def rotate_camera(rtde_c, rtde_r, direction):
@@ -175,6 +177,15 @@ cameraMatrix = np.array([
     [0, 0, 1]
 ])
 
+with open('data/homo2.pkl', 'rb') as f:
+    dct = pickle.load(f)
+    all_corners = np.array(dct['allCorners'])[:, 0]
+table_rect = cv2.minAreaRect(all_corners.reshape(-1, 2))
+src_pts = cv2.boxPoints(table_rect)
+height, width = 500, 500
+dst_pts = np.array([[0, 0], [width, 0], [width, height], [0, height]], dtype=np.float32)
+H = cv2.getPerspectiveTransform(src_pts, dst_pts)
+
 distortionCoeffs = np.array(intr.coeffs)  # [k1, k2, p1, p2, k3]
 marker_world = None
 # rtde_c.moveL(seek_pose, speed=0.2)
@@ -189,13 +200,11 @@ markerReader = MarkerReader(markerId, markerDict, 38, cameraMatrix, distortionCo
 window = None
 
 env = PushTRealEnv()
+env2 = PushTRealEnv()
 
 ### load policy
 
 policy_root = Path('/home/mht/PycharmProjects/DACER-Diffusion-with-Online-RL/logs/pushtcurriculum-v1/sdac_2025-03-15_16-28-36_s100_mask_multitask')
-policy_path = "policy-4000000-800000.pkl"
-# policy_root = Path('/home/mht/PycharmProjects/pusht_real/policy/sac_2025-04-26_11-20-18_s100_test_use_atp1')
-# policy_path = "policy-2600000-520000.pkl"
 
 obs = None
 
@@ -204,6 +213,7 @@ policy = PersistFunction.load(policy_root / "deterministic.pkl")
 def policy_fn(policy_params, obs):
     return policy(policy_params, obs).clip(-1, 1)
 
+policy_path = "policy-4000000-800000.pkl"
 with open(policy_root / policy_path, "rb") as f:
     policy_params = pickle.load(f)
     
@@ -211,14 +221,14 @@ with open(policy_root / policy_path, "rb") as f:
 policy_fn(policy_params, np.zeros((10)))
 kalman_initialized = False
 last_rot = None
-
+obs = None
 try:
     while True:
         # Wait for a coherent pair of frames: depth and color
         frames = pipeline.wait_for_frames()
         depth_frame = frames.get_depth_frame()
         color_frame = frames.get_color_frame()
-        if not depth_frame or not color_frame:
+        if not color_frame or not depth_frame:
             continue
 
         # Convert images to numpy arrays
@@ -229,38 +239,71 @@ try:
         # depth_image = depth_image[::-1,::-1]
         # color_image = color_image[::-1,::-1]
         
-        # parameters = cv2.aruco.DetectorParameters()
-        
-        # detector = cv2.aruco.ArucoDetector(markerDict, parameters)
-        # corners, ids, _ = detector.detectMarkers(color_image)
-        # print(ids)
-        
-        (found, color_image, marker) = markerReader.detectMarkers(color_image, markerDict)
-        
-        if found:
-            tvec = np.array(marker.tvec[0]) / 1000
-            rvec = np.array(marker.rvec[0])
-            marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
-            tblk_env = marker_to_env(marker_world)
-            # if not kalman_initialized:
-            #     kalman.statePost = np.array([[tblk_env[0]], [tblk_env[1]], [tblk_env[2]], [0], [0], [0]], dtype=np.float32)
-            #     kalman_initialized = True
-            # else:
-            if last_rot is None:
-                last_rot = tblk_env[2]
-            else:
-                if np.abs(tblk_env[2] - last_rot)>0.5: # handling noise
-                    pass
-                else:
-                    measurement = np.array([[tblk_env[0]], [tblk_env[1]], [tblk_env[2]]], dtype=np.float32)
-                    kalman.correct(measurement)
-                    last_rot = tblk_env[2]
-                
+        img_table = cv2.warpPerspective(color_image, H, (width, height))
+        img_table[:150, -60:] = 0
+        corners = tracker.detect_corners(img_table)
+        obs_candidate = None
+        if corners is not None:
+            corners = np.concatenate([corners, np.ones((corners.shape[0], 1))], axis=1) @ np.linalg.inv(H).T
+            corners = corners[:, :2] / corners[:, 2:]
+
+            retval, rvec, tvec = cv2.solvePnP(tracker.temp_pts_real.astype(np.float32), 
+                                              corners.astype(np.float32), 
+                                              cameraMatrix, 
+                                              distortionCoeffs, 
+                                              flags=cv2.SOLVEPNP_ITERATIVE)
+            clrs = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255)]
+            for pt, c in zip(corners, clrs):
+                cv2.circle(color_image, tuple(pt.astype(int)), 1, c, -1)
+            # print("rvec, tvec", rvec, tvec)          
             # marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
+            T_leftupper_to_camera = rodrigues_to_matrix(rvec, tvec)
+            T_origin_to_leftupper = rodrigues_to_matrix(np.array([np.pi, 0., 0.,]), np.array([25, 0.0, 0.0]))
+            T_origin_to_camera = T_leftupper_to_camera @ T_origin_to_leftupper
+            rvec = cv2.Rodrigues(T_origin_to_camera[:3, :3])[0]
+            tvec = T_origin_to_camera[:3, 3]
+            print("rvec, tvec pnp", rvec, tvec)
+            color_image = cv2.drawFrameAxes(color_image, cameraMatrix, distortionCoeffs, rvec, tvec, 50)
+            marker_world = pose_tran_fixed_camera(rvec, tvec / 1000., fixed_camera_pose)
+            tblk_env = marker_to_env(marker_world)
+
+            measurement = np.array([[tblk_env[0]], [tblk_env[1]], [tblk_env[2]]], dtype=np.float32)
+            kalman.correct(measurement)
             predicted = kalman.predict().flatten()
-            print(predicted[:3])
-            obs, _ = env.reset(predicted[:3], get_agent_env_pos(rtde_r, rtde_c))
-            env.render()
+            
+            obs_candidate, _ = env2.reset(predicted[:3], get_agent_env_pos(rtde_r, rtde_c))
+            if obs is not None:
+                print(np.linalg.norm(obs_candidate[-3:] - obs[-3:]))
+            if obs is not None and np.linalg.norm(obs_candidate[-3:] - obs[-3:]) < 0.1:
+                obs = obs_candidate
+            #kalman.correct(measurement)
+            # env.reset(kalman.predict(), get_agent_env_pos(rtde_r, rtde_c))
+            # env.render()
+            # color_image = cv2.drawFrameAxes(color_image, cameraMatrix, distortionCoeffs, rvec, tvec, 50)
+            #predicted = kalman.predict().flatten()
+            #obs_candidate, _ = env.reset(predicted[:3], get_agent_env_pos(rtde_r, rtde_c))
+            #env.render()
+            
+        
+        #(found, color_image, marker) = markerReader.detectMarkers(color_image, markerDict)
+        
+
+        #     marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
+        #     tblk_env = marker_to_env(marker_world)
+        #     # if not kalman_initialized:
+        #     #     kalman.statePost = np.array([[tblk_env[0]], [tblk_env[1]], [tblk_env[2]], [0], [0], [0]], dtype=np.float32)
+        #     #     kalman_initialized = True
+        #     # else:
+        #     if last_rot is None:
+        #         last_rot = tblk_env[2]
+        #     else:
+        #         if np.abs(tblk_env[2] - last_rot)>0.5: # handling noise
+        #             pass
+        #         else:
+        #             measurement = np.array([[tblk_env[0]], [tblk_env[1]], [tblk_env[2]]], dtype=np.float32)
+        #             kalman.correct(measurement)
+        #             last_rot = tblk_env[2]
+
         
 
         # Show images
@@ -285,15 +328,19 @@ try:
         #     if marker_world is not None:
         #         make_contact(rtde_c)
         if key == ord('r'):
+            if obs_candidate is not None:
+                obs, _ = env.reset(obs_candidate[:3], get_agent_env_pos(rtde_r, rtde_c))
+
+            # pass
             # on arm camera
             # marker_world = rtde_c.poseTrans(rtde_r.getActualTCPPose(), 
             #                         np.concatenate([tvec, rvec]))
             # fixed camera
-            if found:
-                marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
-                predicted = kalman.predict().flatten()
-                obs, _ = env.reset(predicted[:3], get_agent_env_pos(rtde_r, rtde_c))
-                env.render()
+            # if found:
+            #     marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
+            #     predicted = kalman.predict().flatten()
+            #     obs, _ = env.reset(predicted[:3], get_agent_env_pos(rtde_r, rtde_c))
+            #     env.render()
             
         if key == ord('s'):
             if obs is None:
@@ -313,12 +360,21 @@ try:
             
                 
         if key == ord('p'):
-            if found:
-                marker_world = rtde_c.poseTrans(rtde_r.getActualTCPPose(), 
-                                    np.concatenate([tvec, rvec]))
-                print("Found marker at", marker_world)
-                print("t block env pos", marker_to_env(marker_world))
-                print("agent_pos", get_agent_env_pos(rtde_r, rtde_c))
+            # if found:
+            #     marker_world = rtde_c.poseTrans(rtde_r.getActualTCPPose(), 
+            #                         np.concatenate([tvec, rvec]))
+            #     print("Found marker at", marker_world)
+            #     print("t block env pos", marker_to_env(marker_world))
+            #     print("agent_pos", get_agent_env_pos(rtde_r, rtde_c))
+            if obs is not None:
+                done = False
+                while not done:
+                    action = policy_fn(policy_params, obs)
+                    print("action", action)
+                    obs, _, terminated, truncated, _ = env.step(action)
+                    env.render()
+                    done = terminated or truncated
+                    time.sleep(0.1)
         if key == ord('h'):
             move_to_higher_center(rtde_c, rtde_r)
         if key == ord('b'):

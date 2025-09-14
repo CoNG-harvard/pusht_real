@@ -1,20 +1,11 @@
 import pyrealsense2 as rs
 import numpy as np
 import cv2
-
-import numpy as np
 import os.path as osp
 
 pkg_dir = osp.dirname(osp.dirname(__file__))
 import sys
 sys.path.append(pkg_dir)
-print(pkg_dir)
-from utils.marker_util import Marker, MarkerReader, ARUCO_DICT
-
-# cameraMatrix = np.load(osp.join(pkg_dir, "cameraMatrix.npy"))
-# distortionCoeffs = np.load(osp.join(pkg_dir, "distortions.npy"))
-# print(cameraMatrix)
-# print(distortionCoeffs)
 
 # Create pipeline
 pipeline = rs.pipeline()
@@ -25,20 +16,8 @@ config = rs.config()
 config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
 config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
 
-
-# Define the red color range in RGB
-red_lower = np.array([100, 0, 0])  # Lower bound for red (R > 100, G < 50, B < 50)
-red_upper = np.array([255, 50, 50])  # Upper bound for red
-
-
-# # Create pipeline
-# pipeline = rs.pipeline()
-
-# # Configure the pipeline
-# config = rs.config()
-# config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-# config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-markerId=2
+# Create colorizer for depth visualization
+colorizer = rs.colorizer()
 
 profile = pipeline.start(config)
 # Get stream profile and camera intrinsics
@@ -54,6 +33,11 @@ cameraMatrix = np.array([
 
 distortionCoeffs = np.array(intr.coeffs)  # [k1, k2, p1, p2, k3]
 
+print("Camera Matrix:")
+print(cameraMatrix)
+print("Distortion Coefficients:")
+print(distortionCoeffs)
+
 try:
     while True:
         # Wait for a coherent pair of frames: depth and color
@@ -67,29 +51,47 @@ try:
         depth_image = np.asanyarray(depth_frame.get_data())
         color_image = np.asanyarray(color_frame.get_data())
         
-        # Reverse image
+        # Reverse image if needed
         # depth_image = depth_image[::-1,::-1]
         # color_image = color_image[::-1,::-1]
         
-        # parameters = cv2.aruco.DetectorParameters()
-        markerDict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT["DICT_4X4_50"])
+        # Define the red color range in HSV for better color detection
+        hsv_image = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
         
-        marker = Marker()        
-        markerReader = MarkerReader(markerId, 
-                                    markerDict, 
-                                    38, cameraMatrix, distortionCoeffs)
-        (found, color_image, marker) = markerReader.detectMarkers(color_image, markerDict)
-        if found:
-            print(markerReader.ids)
-            print(marker.tvec[0])
-
-        # Show images
-        cv2.imshow('RealSense', color_image)
-        # cv2.imshow('RealSense Depth', depth_image)
+        # Define range for red color in HSV
+        # Red has two ranges in HSV due to the circular nature of hue
+        lower_red1 = np.array([0, 50, 50])
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([170, 50, 50])
+        upper_red2 = np.array([180, 255, 255])
+        
+        # Create masks for red color
+        mask1 = cv2.inRange(hsv_image, lower_red1, upper_red1)
+        mask2 = cv2.inRange(hsv_image, lower_red2, upper_red2)
+        red_mask = mask1 + mask2
+        
+        # Create colorized depth image
+        colorized_depth = colorizer.colorize(depth_frame)
+        colorized_depth_image = np.asanyarray(colorized_depth.get_data())
+        
+        # Apply red mask to the colorized depth image
+        # Set non-red areas to black (0, 0, 0)
+        masked_depth = colorized_depth_image.copy()
+        masked_depth[red_mask == 0] = [0, 0, 0]  # Set non-red pixels to black
+        
+        # Add text overlay
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(masked_depth, f'Colorized Depth - Red Objects Only', (10, 30), font, 1, (255, 255, 255), 2)
+        
+        # Show only the masked colorized depth image
+        cv2.imshow('RealSense - Colorized Depth (Red Objects Only)', masked_depth)
 
         # Break loop on 'q' key press
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
+            
+except KeyboardInterrupt:
+    print("\nStopping...")
 finally:
     # Stop streaming
     pipeline.stop()

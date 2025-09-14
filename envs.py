@@ -11,7 +11,10 @@ import shapely.geometry as sg
 import cv2
 import skimage.transform as st
 from utils.pymunk_override import DrawOptions
-import logging
+import datetime
+import os
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
 
 def pymunk_to_shapely(body, shapes):
     geoms = list()
@@ -34,14 +37,15 @@ class PushTRealEnv(object):
         'tee': [0.0, 0.5, 0.5, 0.0],
         'lee': [1.0, 0.0, 0.0, 0.0],
         'cee': [1.0, 0.0, 0.0, 1.0],
+        'eye': [0.5, 0.5, 0.5, 0.5]
     }
 
 
     def __init__(self,
                  legacy=False,
                  block_cog=None, damping=None,
-                 render_action=True,
-                 render_size=96,
+                 render_action=False,
+                 render_size=256,
                  reset_to_state=None,
                  render_mode="rgb_array",
                  
@@ -113,7 +117,9 @@ class PushTRealEnv(object):
         self.shape_type = shape_type
         # use legacy RandomState for compatibility
 
-        self.goal_pose = np.array([256, 256, 0.]) # np.pi/4
+        self.goal_pose = np.array([256, 256, np.pi/2]) # np.pi/4
+        # self.goal_pose = np.array([286.83317235, 233.00451328, -2.17050201])
+        # self.goal_pose = np.array([299.23826099, 227.74920978,   2.41282391])
         # self.goal_pose = np.array([342, 270, 2.1])
         self._setup(shape_type=shape_type)
         if self.block_cog is not None:
@@ -142,7 +148,8 @@ class PushTRealEnv(object):
     
     # def update(self, marker_pos, agent_pos,):
         
-        
+    def set_goal_pose(self, goal_pose):
+        self.goal_pose = goal_pose
 
     def step(self, action):
         dt = 1.0 / self.sim_hz
@@ -156,6 +163,11 @@ class PushTRealEnv(object):
             action_diff = action - self.latest_action
         if action is not None:
             self.latest_action = action
+            th = self.goal_pose[-1]
+            rotmat_blk = np.array([[np.cos(th), -np.sin(th)],
+                                    [np.sin(th), np.cos(th)]])  
+            action = np.reshape(action, [2, 1])
+            action = rotmat_blk @ action
             for i in range(n_steps):
                 # Step PD control.
                 # P control works too.
@@ -201,6 +213,7 @@ class PushTRealEnv(object):
         info['dist_agent_block'] = dist_agent_block
         info['pos_diff'] = pos_diff
         info['angle_diff'] = angle_diff
+        info['true_action'] = action
 
         return observation, reward, done, False, info
 
@@ -279,20 +292,24 @@ class PushTRealEnv(object):
         draw_options = DrawOptions(canvas)
 
         # Draw goal pose.
-        goal_body = self._get_goal_pose_body(self.goal_pose)
-        for shape in self.block.shapes:
-            goal_points = [pymunk.pygame_util.to_pygame(goal_body.local_to_world(
-                v), draw_options.surface) for v in shape.get_vertices()]
-            goal_points += [goal_points[0]]
-            pygame.draw.polygon(canvas, self.goal_color, goal_points)
+        draw_goal_pose_flag = True
+        if draw_goal_pose_flag:
+            goal_body = self._get_goal_pose_body(self.goal_pose)
+            for shape in self.block.shapes:
+                goal_points = [pymunk.pygame_util.to_pygame(goal_body.local_to_world(
+                    v), draw_options.surface) for v in shape.get_vertices()]
+                goal_points += [goal_points[0]]
+                pygame.draw.polygon(canvas, self.goal_color, goal_points)
+            
 
-        pygame.draw.circle(canvas, self.debugging_color, self.goal_pose[:-1], 10)
-
+            pygame.draw.circle(canvas, self.debugging_color, self.goal_pose[:-1], 10)
+        
         # Draw agent and block.
         self.space.debug_draw(draw_options)
 
         if mode == "human":
             # The following line copies our drawings from `canvas` to the visible window
+            # self.window.blit(pygame.transform.flip(canvas, False, True), canvas.get_rect())
             self.window.blit(canvas, canvas.get_rect())
             pygame.event.pump()
             pygame.display.update()
@@ -396,6 +413,8 @@ class PushTRealEnv(object):
             self.block = self.add_cee((256, 300), 0)
         elif shape_type == 'lee':
             self.block = self.add_lee((256, 300), 0)
+        elif shape_type == 'eye':
+            self.block = self.add_eye((256, 300), 0)
         else:
             raise ValueError(f'Unsupported shape {shape_type}')
         self.goal_color = pygame.Color('LightGreen')
@@ -512,6 +531,22 @@ class PushTRealEnv(object):
                      (-length / 2 + scale, scale)]
         vertices_ls = [vertices1, vertices2]
         return self.add_shape([0.5, 0.25], vertices_ls, position, angle, color, mask)
+    
+    def add_eye(self, position, angle, scale=30, color='LightSlateGray', mask=pymunk.ShapeFilter.ALL_MASKS()):
+        length = 4
+        length *= scale
+        vertices1 = [(-length/2, scale),
+                     (length/2, scale),
+                     (length/2, 0),
+                     (-length/2, 0)]
+        vertices2 = [(-scale/2, scale),
+                     (-scale/2, length-scale),
+                     (scale/2, length-scale),
+                     (scale/2, scale)]
+        #vertices3 = np.array(vertices1) + np.array([0, length])
+        vertices3 = np.array(vertices1) + np.array([0, length-scale])
+        vertices_ls = [vertices1, vertices2, vertices3.tolist()]
+        return self.add_shape([0.5, 0.5], vertices_ls, position, angle, color, mask)
     
 class PushTShpRealEnv(PushTRealEnv):
     metadata = {"render.modes": [

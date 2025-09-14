@@ -7,10 +7,10 @@ import pyrealsense2 as rs
 pkg_dir = osp.dirname(osp.dirname(__file__))
 import sys
 sys.path.append(pkg_dir)
-from utils.marker_util import Marker, MarkerReader, ARUCO_DICT, get_average_rot_tran
+from utils.marker_util import Marker, MarkerReader, ARUCO_DICT, get_average_rot_tran, average_rotations
 import rtde_control
 import rtde_receive
-
+import yaml
 
 
 # ============== Robot Configuration ==============
@@ -33,8 +33,11 @@ MARKER_SIZE = 0.038  # Size of the ArUco marker in meters (e.g., 5cm)
 
 pipeline_d435 = rs.pipeline()
 config2 = rs.config()
-config2.enable_device('233722070172')  # Replace with your camera's serial number
+config2.enable_device('337322073528')  # Replace with your camera's serial number 337322073528 233722070172
 config2.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
+
+with open("./data/marker_on_table.yaml", "r") as f:
+    fixed_markers_config = yaml.safe_load(f)
 
 # Start both pipelines
 # profile_d405 = pipeline_d405.start(config1)
@@ -80,7 +83,7 @@ distortionCoeffs_d435 = np.array(intr_d435.coeffs)  # [k1, k2, p1, p2, k3]
 #     color_sensor.set_option(rs.option.gain, 48)  # Default is 16; lower = less bright
 
 # ============== Initialize marker reader ==============
-markerId=1
+markerId=2
 markerDict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT["DICT_4X4_50"])    
 # markerReader_d405 = MarkerReader(markerId, markerDict, 38, cameraMatrix_d405, distortionCoeffs_d405)
 markerReader_d435 = MarkerReader(markerId, markerDict, 38, cameraMatrix_d435, distortionCoeffs_d435)
@@ -121,8 +124,10 @@ if __name__ == "__main__":
     # Example data: Replace with real observations
     observations = []  # List of (corners_in_fixed_cam, marker_id)
     robot_poses = []   # List of T_cam_to_base (4x4) for robot camera
-
+    fixed_tvecs = []
+    fixed_rvecs = [ ]
     try: 
+        i = 0
         
         # (1) Collect data: Loop over multiple robot poses and detect markers
         while True:
@@ -153,14 +158,12 @@ if __name__ == "__main__":
                 # time.sleep(2.0)
             if key == ord('p'):
                 if found:
-                    # rvec, tvec = get_average_rot_tran(markerReader_d435, markerDict, pipeline_d435, num=30)
-                    # marker_world = rtde_c.poseTrans(rtde_r.getActualTCPPose(), 
-                    #                     np.concatenate([tvec / 1000, rvec]))
-                    # print("Found marker by d435 in world", marker_world)
-                    # marker_world = np.array(marker_world)
-                    marker_world = np.array([ -0.151, -0.125, 0.0, 0.0, 0.0, -np.pi / 2])
-                    T_marker_to_world = rodrigues_to_matrix(marker_world[3:], marker_world[:3])
-            
+                    marker_config = fixed_markers_config[i]
+                    marker_trvec = marker_config['trvec']
+                    marker_trvec = np.array(marker_trvec)
+                    T_marker_to_world = rodrigues_to_matrix(marker_trvec[3:], marker_trvec[:3])
+                    print(f"Pulling out {i+1} marker at {marker_trvec}")
+                    i += 1
             if key == ord('i'):
                 if found:
                     rvec, tvec = get_average_rot_tran(markerReader_d435, markerDict, pipeline_d435, num=30)
@@ -169,7 +172,13 @@ if __name__ == "__main__":
                     print("Found marker at d405 in relative", T_marker_to_fixed)
                     T_fixed_to_marker = reverse_transformation(T_marker_to_fixed)
                     print("reverse transformation", T_fixed_to_marker)
-                
+                    
+                    T_initial_guess = T_marker_to_world @ T_fixed_to_marker
+                    initial_guess_rvec = cv2.Rodrigues(T_initial_guess[:3, :3])[0]
+                    initial_guess_tvec = T_initial_guess[:3, 3]
+                    print("Initial guess of fixed camera pose (rvec, tvec):", initial_guess_rvec.flatten(), initial_guess_tvec.flatten())
+                    fixed_rvecs.append(initial_guess_rvec.flatten())
+                    fixed_tvecs.append(initial_guess_tvec.flatten())
             if key == ord('q'):
                 break  
             
@@ -181,10 +190,9 @@ if __name__ == "__main__":
             cv2.namedWindow('RealSense Cameras', cv2.WINDOW_NORMAL)
             cv2.imshow('RealSense Cameras', combined)
 
-        T_initial_guess = T_marker_to_world @ T_fixed_to_marker
-        initial_guess_rvec = cv2.Rodrigues(T_initial_guess[:3, :3])[0]
-        initial_guess_tvec = T_initial_guess[:3, 3]
-        print("Initial guess of fixed camera pose (rvec, tvec):", initial_guess_rvec.flatten(), initial_guess_tvec.flatten())
+        final_rvec = average_rotations(np.vstack(fixed_rvecs))
+        final_tvec = np.mean(np.vstack(fixed_tvecs), axis=0)
+        print("Final average rvec, tvec:", final_rvec, final_tvec)
     
         # Get initial guess of the fixed camera pose
     finally:

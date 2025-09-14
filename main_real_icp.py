@@ -24,11 +24,19 @@ from utils.rot_utils import rodrigues_to_matrix
 from utils.kalman_filter import get_kalman_filter
 
 import pygame
+# from utils.tblock_tracker6 import TBlockTracker
+from utils.tblock_tracker_o3d import TBlockTracker
 from envs import PushTRealEnv
+from utils import CAMERA_POSE
 
 window_size = 512
+center = np.array([-0.151 - 0.256, 0.125 + 0.256])
+home = np.array([-0.151 - 0.1, 0.125 + 0.1])
 
-center = np.array([-0.151 - 0.256, -0.125 - 0.256])
+ROBOT_BOUND_X = [-0.151 - 0.512, -0.151]
+ROBOT_BOUND_Y = [0.135, 0.135 + 0.512]
+
+PUSH_Z = 0.003
 
 # cameraMatrix = np.load(osp.join(pkg_dir, "cameraMatrix.npy"))
 # distortionCoeffs = np.load(osp.join(pkg_dir, "distortions.npy"))
@@ -36,10 +44,7 @@ center = np.array([-0.151 - 0.256, -0.125 - 0.256])
 # camera_tcp = [-0.05785834, 0.01470036, 0.02680225, -0.19765198, 0.15008495, -1.55158033, ]
 
 # tvec, rvec
-# fixed_camera_pose = [-0.65697878, -0.14177968,  0.6323136, -1.83416353,  2.11347714, -0.60475937] # first d405
-# fixed_camera_pose = [-0.61743599, -0.11876692,  0.60051386, -1.86847763,  2.24117025, -0.70505939] # second d435
-# Initial guess of fixed camera pose (rvec, tvec): [-1.89865708  2.27415181 -0.75866311] [-0.62384115 -0.12916752  0.59730634]
-fixed_camera_pose = [0.26809229, 0.68914486, 0.72160278, 0.28006889, -2.68845418, 0.14502297] # third d435
+fixed_camera_pose = np.array(CAMERA_POSE) # average
 camera_tcp = [-0.07119155, 0.03392638, 0.0302255, -0.20909042, 0.21550955, -1.53705897]
 rod_tcp = [0.0, 0.0, 0.2002, 0.0, 0.0, -1.57079633]
 
@@ -50,6 +55,8 @@ pipeline = rs.pipeline()
 config = rs.config()
 config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
 config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
+#config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+#config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
 
 
 # Define the red color range in RGB
@@ -72,11 +79,19 @@ def move_real_speed(rtde_c,rtde_r, d):
     means action 1 approximate to 600mm/s, 0.6
     if 100 Hz then 600 / 50 = 12 mm, maybe too large
     '''
-    
+    print("Speed command: ", d)
+    rtde_c.setTcp(rod_tcp)
+    print("Setting to Rod TCP!")
     tcp_pose = rtde_r.getActualTCPPose()
     target_pose = tcp_pose.copy()
     target_pose[0] += d[0]*0.1
+    
     target_pose[1] -= d[1]*0.1
+    
+    target_pose[2] = PUSH_Z
+    
+    target_pose[0] = np.clip(target_pose[0], ROBOT_BOUND_X[0], ROBOT_BOUND_X[1])
+    target_pose[1] = np.clip(target_pose[1], ROBOT_BOUND_Y[0], ROBOT_BOUND_Y[1])
 
     # When doing position-based force control, the speed has to be extremely slow for stable results.
     return rtde_c.servoL(target_pose, 0.0, 0.0, 
@@ -121,7 +136,24 @@ def real_to_env(pose_real: np.ndarray) -> np.ndarray:
     
     x = 256 + 0.6 * 1000 * (pose_real[0] - center[0])
     y = 256 - 0.6 * 1000 * (pose_real[1] - center[1])
-    yaw = pose_real[2]
+    yaw = - pose_real[2]
+    return np.array([x, y, yaw])
+
+def env_to_real(pose_env: np.ndarray) -> np.ndarray:
+    """transform env coordinate to real world.
+
+    Args:
+        pose_env (np.ndarray): env pose
+        x_real = (x_env - 256) / 600 + center[0]
+        y_real = (256 - y_env) / 600 + center[1]
+
+    Returns:
+        _type_: _description_
+    """
+    
+    x = (pose_env[0] - 256) / 600 + center[0]
+    y = (256 - pose_env[1]) / 600 + center[1]
+    yaw = pose_env[2]
     return np.array([x, y, yaw])
 
 def marker_to_env(marker_world):
@@ -145,7 +177,7 @@ def move_to_higher_center(rtde_c, rtde_r):
     
 def move_to_lower_push(rtde_c, rtde_r):
     rtde_c.setTcp(rod_tcp)
-    center_pose = [center[0], center[1], 0.03, -3.1415730563016435, 0, 0]
+    center_pose = [home[0], home[1], PUSH_Z, -3.1415730563016435, 0, 0]
     rtde_c.moveL(center_pose, speed=0.05)
     
 def rotate_camera(rtde_c, rtde_r, direction):
@@ -175,6 +207,16 @@ cameraMatrix = np.array([
     [0, 0, 1]
 ])
 
+tracker = TBlockTracker(camera_matrix=cameraMatrix, fixed_camera_pose=fixed_camera_pose, mode='bgr', 
+                        )
+tracker.color_u = np.array([250, 120, 30])
+tracker.color_l = np.array([90, 0, 0])
+
+src_pts = np.array([[150,100], [1050,75], [1200, 700], [150,700]], dtype=np.float32)
+height, width = 700, 700
+dst_pts = np.array([[0, 0], [width, 0], [width, height], [0, height]], dtype=np.float32)
+H = cv2.getPerspectiveTransform(src_pts, dst_pts)
+
 distortionCoeffs = np.array(intr.coeffs)  # [k1, k2, p1, p2, k3]
 marker_world = None
 # rtde_c.moveL(seek_pose, speed=0.2)
@@ -193,32 +235,27 @@ env = PushTRealEnv()
 ### load policy
 
 policy_root = Path('/home/mht/PycharmProjects/DACER-Diffusion-with-Online-RL/logs/pushtcurriculum-v1/sdac_2025-03-15_16-28-36_s100_mask_multitask')
-policy_path = "policy-4000000-800000.pkl"
-# policy_root = Path('/home/mht/PycharmProjects/pusht_real/policy/sac_2025-04-26_11-20-18_s100_test_use_atp1')
-# policy_path = "policy-2600000-520000.pkl"
 
-obs = None
 
 policy = PersistFunction.load(policy_root / "deterministic.pkl")
 @jax.jit
 def policy_fn(policy_params, obs):
     return policy(policy_params, obs).clip(-1, 1)
 
+policy_path = "policy-4000000-800000.pkl"
 with open(policy_root / policy_path, "rb") as f:
     policy_params = pickle.load(f)
     
 ## warm up
 policy_fn(policy_params, np.zeros((10)))
-kalman_initialized = False
-last_rot = None
-
+obs = None
 try:
     while True:
         # Wait for a coherent pair of frames: depth and color
         frames = pipeline.wait_for_frames()
         depth_frame = frames.get_depth_frame()
         color_frame = frames.get_color_frame()
-        if not depth_frame or not color_frame:
+        if not color_frame or not depth_frame:
             continue
 
         # Convert images to numpy arrays
@@ -229,38 +266,28 @@ try:
         # depth_image = depth_image[::-1,::-1]
         # color_image = color_image[::-1,::-1]
         
-        # parameters = cv2.aruco.DetectorParameters()
+        #img_table = cv2.warpPerspective(color_image, H, (width, height))
+    
         
-        # detector = cv2.aruco.ArucoDetector(markerDict, parameters)
-        # corners, ids, _ = detector.detectMarkers(color_image)
-        # print(ids)
+        #(found, color_image, marker) = markerReader.detectMarkers(color_image, markerDict)
         
-        (found, color_image, marker) = markerReader.detectMarkers(color_image, markerDict)
-        
-        if found:
-            tvec = np.array(marker.tvec[0]) / 1000
-            rvec = np.array(marker.rvec[0])
-            marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
-            tblk_env = marker_to_env(marker_world)
-            # if not kalman_initialized:
-            #     kalman.statePost = np.array([[tblk_env[0]], [tblk_env[1]], [tblk_env[2]], [0], [0], [0]], dtype=np.float32)
-            #     kalman_initialized = True
-            # else:
-            if last_rot is None:
-                last_rot = tblk_env[2]
-            else:
-                if np.abs(tblk_env[2] - last_rot)>0.5: # handling noise
-                    pass
-                else:
-                    measurement = np.array([[tblk_env[0]], [tblk_env[1]], [tblk_env[2]]], dtype=np.float32)
-                    kalman.correct(measurement)
-                    last_rot = tblk_env[2]
-                
-            # marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
-            predicted = kalman.predict().flatten()
-            print(predicted[:3])
-            obs, _ = env.reset(predicted[:3], get_agent_env_pos(rtde_r, rtde_c))
-            env.render()
+
+        #     marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
+        #     tblk_env = marker_to_env(marker_world)
+        #     # if not kalman_initialized:
+        #     #     kalman.statePost = np.array([[tblk_env[0]], [tblk_env[1]], [tblk_env[2]], [0], [0], [0]], dtype=np.float32)
+        #     #     kalman_initialized = True
+        #     # else:
+        #     if last_rot is None:
+        #         last_rot = tblk_env[2]
+        #     else:
+        #         if np.abs(tblk_env[2] - last_rot)>0.5: # handling noise
+        #             pass
+        #         else:
+        #             measurement = np.array([[tblk_env[0]], [tblk_env[1]], [tblk_env[2]]], dtype=np.float32)
+        #             kalman.correct(measurement)
+        #             last_rot = tblk_env[2]
+
         
 
         # Show images
@@ -285,40 +312,89 @@ try:
         #     if marker_world is not None:
         #         make_contact(rtde_c)
         if key == ord('r'):
+            print("Pressed <r>.")
+            loss, pose = tracker.estimate(color_image, depth_image, plot=True)
+            print('tracked pose raw: ', pose)
+            env_pose = real_to_env(pose)
+            obs, _ = env.reset(env_pose, get_agent_env_pos(rtde_r, rtde_c))
+            env.render()
+
+            # pass
             # on arm camera
             # marker_world = rtde_c.poseTrans(rtde_r.getActualTCPPose(), 
             #                         np.concatenate([tvec, rvec]))
             # fixed camera
-            if found:
-                marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
-                predicted = kalman.predict().flatten()
-                obs, _ = env.reset(predicted[:3], get_agent_env_pos(rtde_r, rtde_c))
-                env.render()
-            
-        if key == ord('s'):
+            # if found:
+            #     marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
+            #     predicted = kalman.predict().flatten()
+            #     obs, _ = env.reset(predicted[:3], get_agent_env_pos(rtde_r, rtde_c))
+            #     env.render()
+        
+        if key == ord('t'):
+            print("Pressed <t>.")
             if obs is None:
                 print("Please press r to reset the env first")
                 continue
-            action = policy_fn(policy_params, obs)
-            print("action", action)
-            obs, _, _, _, _ = env.step(action)
+        
+            res = tracker.track(color_image, depth_image, last_pose=env_to_real(obs), safe=False)
+            if res is not None:
+                loss, pose = res
+                env_pose = real_to_env(pose)
+                obs, _ = env.reset(env_pose, get_agent_env_pos(rtde_r, rtde_c))
             env.render()
         
+        if key == ord('s'):
+            print("Pressed <s>.")
+            if obs is None:
+                print("Please press r to reset the env first")
+                continue
+        
+            res = tracker.track(color_image, depth_image, last_pose=env_to_real(obs), safe=False)
+            if res is not None:
+                loss, pose = res
+                env_pose = real_to_env(pose)
+                obs, _ = env.reset(env_pose, get_agent_env_pos(rtde_r, rtde_c))
+                env.render()
+            # env.render()
+                    
+            action = policy_fn(policy_params, obs)
+            # [CAUTION] Temporary!
+            # action = action.at[1].set(-action[1])
+            
+            print("action", action)
+            obs, _, _, _, info = env.step(action)
+            env.render()
+            
+            true_action = np.squeeze(info['true_action'])
+            print("Actions in world frame: ", true_action)
+        
         if key == ord('a'):
+            print("Pressed <a>.")
             if action is None:
                 print("Please press s to get actions first")
                 continue
-            move_real_speed(rtde_c, rtde_r, 600 / 1000 * action)
+            move_real_speed(rtde_c, rtde_r, 600 / 1000 * true_action)
             action = None
             
                 
         if key == ord('p'):
-            if found:
-                marker_world = rtde_c.poseTrans(rtde_r.getActualTCPPose(), 
-                                    np.concatenate([tvec, rvec]))
-                print("Found marker at", marker_world)
-                print("t block env pos", marker_to_env(marker_world))
-                print("agent_pos", get_agent_env_pos(rtde_r, rtde_c))
+            # if found:
+            #     marker_world = rtde_c.poseTrans(rtde_r.getActualTCPPose(), 
+            #                         np.concatenate([tvec, rvec]))
+            #     print("Found marker at", marker_world)
+            #     print("t block env pos", marker_to_env(marker_world))
+            #     print("agent_pos", get_agent_env_pos(rtde_r, rtde_c))
+            if obs is not None:
+                done = False
+                # while not done:
+                print("block simulation pose", env.block.position, env.block.angle)
+                action = policy_fn(policy_params, obs)
+                print("action", action)
+                obs, _, terminated, truncated, info = env.step(action)
+                print("Actions in world frame: ", info['true_action'])
+                env.render()
+                done = terminated or truncated
+                time.sleep(0.1)
         if key == ord('h'):
             move_to_higher_center(rtde_c, rtde_r)
         if key == ord('b'):

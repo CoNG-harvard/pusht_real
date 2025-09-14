@@ -62,6 +62,10 @@ def get_z_inverted_rotvec(marker_world):
 
 def rodrigues_to_matrix(rvec, tvec):
     """Convert Rodrigues rotation vector to 4x4 transformation matrix."""
+    if isinstance(rvec, list):
+        rvec = np.array(rvec).astype(float)
+    if isinstance(tvec, list):
+        tvec = np.array(tvec).astype(float)
     R, _ = cv2.Rodrigues(rvec)
     T = np.eye(4)
     T[:3, :3] = R

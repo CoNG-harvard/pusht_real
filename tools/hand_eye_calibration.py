@@ -46,8 +46,12 @@ distortionCoeffs = np.array(intr.coeffs)  # [k1, k2, p1, p2, k3]
 
 # Robot listeners
 import rtde_receive
+import rtde_control
 
-rtde_r = rtde_receive.RTDEReceiveInterface("192.168.1.10")
+rtde_c = rtde_control.RTDEControlInterface("192.168.0.191")
+rtde_r = rtde_receive.RTDEReceiveInterface("192.168.0.191")
+rtde_c.setTcp([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+rtde_c.disconnect()
 
 def is_key_pressed():
     # Check if there's keyboard input ready
@@ -148,7 +152,7 @@ def main():
             markerDict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT["DICT_4X4_50"])
 
             marker = Marker()        
-            markerReader = MarkerReader(markerId, markerDict, 40, cameraMatrix, distortionCoeffs)
+            markerReader = MarkerReader(markerId, markerDict, 97, cameraMatrix, distortionCoeffs)
             (found, color_image, marker) = markerReader.detectMarkers(color_image, markerDict)
             # print(marker.tvec)
             # print(marker.rvec)

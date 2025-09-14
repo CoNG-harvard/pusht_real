@@ -3,3 +3,10 @@ images/
 policy/
 *.pyc
 notebooks/** 
+real_logs/
+data/
+logs/
+saved_depth_images/
+test/point_clouds/registration_results/
+*.npy
+*.zip

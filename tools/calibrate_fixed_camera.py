@@ -17,8 +17,8 @@ import rtde_receive
 
 
 # ============== Robot Configuration ==============
-rtde_c = rtde_control.RTDEControlInterface("192.168.1.10")
-rtde_r = rtde_receive.RTDEReceiveInterface("192.168.1.10")
+rtde_c = rtde_control.RTDEControlInterface("192.168.0.191")
+rtde_r = rtde_receive.RTDEReceiveInterface("192.168.0.191")
 from utils import CAMERA_TCP
 rtde_c.setTcp(CAMERA_TCP)
 
@@ -31,12 +31,12 @@ DIST_COEFFS_D405 = np.load(osp.join(pkg_dir, "data", "distortions.npy"))  # Repl
 # Configure both cameras
 pipeline_d405 = rs.pipeline()
 config1 = rs.config()
-config1.enable_device('126122270638')  # Replace with your camera's serial number
+config1.enable_device('234422060060')  # Replace with your camera's serial number
 config1.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
 
 pipeline_d435 = rs.pipeline()
 config2 = rs.config()
-config2.enable_device('233722070172')  # Replace with your camera's serial number
+config2.enable_device('337322073528')  # Replace with your camera's serial number
 config2.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
 
 # Start both pipelines
@@ -83,7 +83,7 @@ if color_sensor.supports(rs.option.gain):
     color_sensor.set_option(rs.option.gain, 48)  # Default is 16; lower = less bright
 
 # ============== Initialize marker reader ==============
-markerId=0
+markerId=2
 markerDict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT["DICT_4X4_50"])    
 markerReader_d405 = MarkerReader(markerId, markerDict, 38, cameraMatrix_d405, distortionCoeffs_d405)
 markerReader_d435 = MarkerReader(markerId, markerDict, 38, cameraMatrix_d435, distortionCoeffs_d435)
@@ -224,7 +224,7 @@ if __name__ == "__main__":
 
     # (2) Initial guess for fixed camera pose (e.g., from first observation)
     # Initial guess of fixed camera pose (rvec, tvec): [-1.83416353  2.11347714 -0.60475937] [-0.65697878 -0.14177968  0.6323136 ]
-    initial_pose = np.array([-0.65697878, -0.14177968, 0.6323136, -1.83416353, 2.11347714, -0.60475937]) # tvec, rvec
+    initial_pose = np.array([-0.20152959, 0.55597235, 0.82667047, -0.38466664, 3.02401266, -0.02062024]) # tvec, rvec
 
     # (3) Refine with bundle adjustment
     optimized_pose = optimize_fixed_camera_pose(initial_pose, observations, robot_poses)

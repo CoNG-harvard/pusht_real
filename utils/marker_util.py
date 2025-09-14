@@ -7,6 +7,8 @@ import os.path as osp
 import math
 import time
 from scipy.spatial.transform import Rotation as R
+from utils.rot_utils import rodrigues_to_matrix, average_rotations
+import copy
 
 ARUCO_DICT = {
                 "DICT_4X4_50": cv2.aruco.DICT_4X4_50,
@@ -234,3 +236,93 @@ def get_average_rot_tran(markerReader, markerDict, pipeline, num=30):
     # Convert back to rotation vector
     rot_vec_avg = R.from_matrix(R_avg).as_rotvec()
     return rot_vec_avg, tvec_avg
+
+class MultiMarkerObjectTracker():
+    
+    def __init__(self, object_config, cameraMatrix, distortionCoeffs):
+        self.object_config = object_config
+        self.marker_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT["DICT_4X4_50"])
+        self.marker_readers = []
+        self.markers = []
+        self.marker_ids = []
+        self.markerSize = object_config['marker_size']
+        self.cameraMatrix = cameraMatrix
+        self.distortionCoeffs = distortionCoeffs
+        for marker in object_config['markers']:
+            self.marker_ids.append(marker['id'])
+            
+    def get_marker_rvec_tvec(self, marker_id):
+        assert self.object_config is not None, "Object config is not set"
+        for marker in self.object_config['markers']:
+            if marker['id'] == marker_id:
+                # fixed some bias
+                rvec, tvec =  marker['rvec'], marker['tvec']
+                mtvec = copy.deepcopy(tvec)
+                mtvec[1] = tvec[1] - 0.015
+                return rvec, mtvec
+            # else:
+        print(f"Marker {marker_id} not found in object config")
+        return None, None             
+            
+    def detect(self, img, camera_rvec, camera_tvec):
+        if isinstance(camera_rvec, list):
+            camera_rvec = np.array(camera_rvec)
+        if isinstance(camera_tvec, list):
+            camera_tvec = np.array(camera_tvec)
+        image = img.copy()
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        cv2.aruco_dict = self.marker_dict
+        parameters = cv2.aruco.DetectorParameters_create()
+        # global arucoParams
+        
+        (allCorners, ids, rejected) = cv2.aruco.detectMarkers(gray, self.marker_dict, parameters=arucoParams,
+                                                                    # cameraMatrix=self.cameraMatrix,
+                                                                    # distCoeff=self.distortionCoeffs
+                                                                    )
+        # allCorners, ids, _ = self.detector.detectMarkers(img)
+        T_camera_from_world = rodrigues_to_matrix(camera_rvec, camera_tvec)
+        
+        marker_rvecs = []
+        marker_tvecs = []
+        if len(allCorners) > 0:
+            self.marker = Marker()
+            for i in range(0, len(ids)):
+                
+                # (topLeft, topRight, bottomRight, bottomLeft) = allCorners[i].reshape((4, 2))
+                
+                rvecs, tvecs, objPoints = cv2.aruco.estimatePoseSingleMarkers(allCorners,
+                                                                              self.markerSize,
+                                                                              cameraMatrix=self.cameraMatrix,
+                                                                              distCoeffs=self.distortionCoeffs)
+                
+                
+                # Draw a square around the markers
+                cv2.aruco.drawDetectedMarkers(image, allCorners) 
+                id = int(ids[i][0])
+                
+                if id in self.marker_ids:
+                    self.marker = Marker(allCorners, id, rvecs[i], tvecs[i]) # , objPoints[i]
+                    
+                    cv2.drawFrameAxes(image, self.cameraMatrix, self.distortionCoeffs, rvecs[i], tvecs[i], 40)
+                    
+                    T_marker_from_camera = rodrigues_to_matrix(rvecs[i], tvecs[i] / 1000)
+                    T_marker_from_world = T_camera_from_world @ T_marker_from_camera
+                    block_rvec, block_tvec = self.get_marker_rvec_tvec(id)
+
+                    T_block_from_marker = rodrigues_to_matrix(block_rvec, block_tvec)
+                    T_block_from_world = T_marker_from_world @ T_block_from_marker
+                    R_block_from_world = T_block_from_world[:3, :3]
+                    t_block_from_world = T_block_from_world[:3, 3]
+                    if R_block_from_world[:, 2].dot(np.array([0, 0, 1])) > 0.9:
+                        marker_rvecs.append(cv2.Rodrigues(R_block_from_world)[0].flatten())
+                        marker_tvecs.append(t_block_from_world)
+
+            if len(marker_rvecs) > 0:
+                avg_rvec = average_rotations(np.vstack(marker_rvecs))
+                avg_tvec = np.mean(np.vstack(marker_tvecs), axis=0)
+                    
+                return True, avg_rvec, avg_tvec, image
+            else:
+                return False, None, None, image
+        else:
+            return False, None, None, image

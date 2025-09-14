@@ -14,26 +14,27 @@ import rtde_receive
 
 
 # ============== Robot Configuration ==============
-rtde_c = rtde_control.RTDEControlInterface("192.168.1.10")
-rtde_r = rtde_receive.RTDEReceiveInterface("192.168.1.10")
+rtde_c = rtde_control.RTDEControlInterface("192.168.0.191")
+rtde_r = rtde_receive.RTDEReceiveInterface("192.168.0.191")
 from utils import CAMERA_TCP
 rtde_c.setTcp(CAMERA_TCP)
 
 # ====== Parameters ======
-MARKER_SIZE = 0.038  # Size of the ArUco marker in meters (e.g., 5cm)
-CAMERA_MATRIX_D405 = np.load(osp.join(pkg_dir, "data", "cameraMatrix.npy"))  # Load your camera matrix
-DIST_COEFFS_D405 = np.load(osp.join(pkg_dir, "data", "distortions.npy"))  # Replace with your distortion coefficients
+MARKER_SIZE = 0.097  # Size of the ArUco marker in meters (e.g., 5cm)
+# CAMERA_MATRIX_D405 = np.load(osp.join(pkg_dir, "data", "cameraMatrix.npy"))  # Load your camera matrix
+# DIST_COEFFS_D405 = np.load(osp.join(pkg_dir, "data", "distortions.npy"))  # Replace with your distortion coefficients
+markerId=0
 
 # =============== Initialize cameras ==================
 # Configure both cameras
 pipeline_d405 = rs.pipeline()
 config1 = rs.config()
-config1.enable_device('126122270638')  # Replace with your camera's serial number
+config1.enable_device('234422060060')  # Replace with your camera's serial number
 config1.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
 
 pipeline_d435 = rs.pipeline()
 config2 = rs.config()
-config2.enable_device('233722070172')  # Replace with your camera's serial number
+config2.enable_device('337322073528')  # Replace with your camera's serial number
 config2.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
 
 # Start both pipelines
@@ -80,10 +81,10 @@ if color_sensor.supports(rs.option.gain):
     color_sensor.set_option(rs.option.gain, 48)  # Default is 16; lower = less bright
 
 # ============== Initialize marker reader ==============
-markerId=0
+
 markerDict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT["DICT_4X4_50"])    
-markerReader_d405 = MarkerReader(markerId, markerDict, 38, cameraMatrix_d405, distortionCoeffs_d405)
-markerReader_d435 = MarkerReader(markerId, markerDict, 38, cameraMatrix_d435, distortionCoeffs_d435)
+markerReader_d405 = MarkerReader(markerId, markerDict, MARKER_SIZE * 1000, cameraMatrix_d405, distortionCoeffs_d405)
+markerReader_d435 = MarkerReader(markerId, markerDict, MARKER_SIZE * 1000, cameraMatrix_d435, distortionCoeffs_d435)
 
 # ====== Helper Functions ======
 def detect_markers(image):
@@ -182,7 +183,7 @@ if __name__ == "__main__":
         T_initial_guess = T_marker_to_world @ T_fixed_to_marker
         initial_guess_rvec = cv2.Rodrigues(T_initial_guess[:3, :3])[0]
         initial_guess_tvec = T_initial_guess[:3, 3]
-        print("Initial guess of fixed camera pose (rvec, tvec):", initial_guess_rvec.flatten(), initial_guess_tvec.flatten())
+        print("Initial guess of fixed camera pose (tvec, rvec):", np.concatenate([initial_guess_tvec.flatten(), initial_guess_rvec.flatten()]))
     
         # Get initial guess of the fixed camera pose
     finally:

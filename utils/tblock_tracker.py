@@ -49,7 +49,7 @@ class TBlockTracker:
             angle_last = self.curr_ang
             allowed_ang_diff = self.allowed_angle_diff_per_frame
 
-        score, curr_pts, curr_kp, curr_ang = self.detect_block_pose_single(image, morph_sz=morph_sz, 
+        score, curr_pts, curr_kp, curr_ang = self.detect_block_pose_single(image, 
                                                                            angle_last=angle_last, 
                                                                            allowed_ang_diff=allowed_ang_diff)
         

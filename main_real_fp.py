@@ -14,6 +14,7 @@ sys.path.append(pkg_dir)
 print(pkg_dir)
 from utils.marker_util import Marker, MarkerReader, ARUCO_DICT
 from utils.rot_utils import get_z_inverted_rotvec
+from utils.sftp_client import *
 # from utils.robot_control import move_z, move_real_speed
 import time
 from pathlib import Path
@@ -39,7 +40,7 @@ center = np.array([-0.151 - 0.256, -0.125 - 0.256])
 # fixed_camera_pose = [-0.65697878, -0.14177968,  0.6323136, -1.83416353,  2.11347714, -0.60475937] # first d405
 # fixed_camera_pose = [-0.61743599, -0.11876692,  0.60051386, -1.86847763,  2.24117025, -0.70505939] # second d435
 # Initial guess of fixed camera pose (rvec, tvec): [-1.89865708  2.27415181 -0.75866311] [-0.62384115 -0.12916752  0.59730634]
-fixed_camera_pose = [0.26809229, 0.68914486, 0.72160278, 0.28006889, -2.68845418, 0.14502297] # third d435
+fixed_camera_pose = [-0.62384115, -0.12916752, 0.59730634, -1.89865708, 2.27415181, -0.75866311] # third d435
 camera_tcp = [-0.07119155, 0.03392638, 0.0302255, -0.20909042, 0.21550955, -1.53705897]
 rod_tcp = [0.0, 0.0, 0.2002, 0.0, 0.0, -1.57079633]
 
@@ -56,8 +57,8 @@ config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
 red_lower = np.array([100, 0, 0])  # Lower bound for red (R > 100, G < 50, B < 50)
 red_upper = np.array([255, 50, 50])  # Upper bound for red
 
-rtde_c = rtde_control.RTDEControlInterface("192.168.0.191")
-rtde_r = rtde_receive.RTDEReceiveInterface("192.168.0.191")
+rtde_c = rtde_control.RTDEControlInterface("192.168.1.10")
+rtde_r = rtde_receive.RTDEReceiveInterface("192.168.1.10")
 rtde_c.setTcp(camera_tcp)
 
 kalman = get_kalman_filter()
@@ -174,6 +175,7 @@ cameraMatrix = np.array([
     [0, intr.fy, intr.ppy],
     [0, 0, 1]
 ])
+np.savetxt('data/cam_K.txt', cameraMatrix, fmt='%f')
 
 distortionCoeffs = np.array(intr.coeffs)  # [k1, k2, p1, p2, k3]
 marker_world = None
@@ -181,21 +183,14 @@ marker_world = None
 
 ## setup to detect marker 0
 
-markerId=0
-markerDict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT["DICT_4X4_50"])
-marker = Marker()        
-markerReader = MarkerReader(markerId, markerDict, 38, cameraMatrix, distortionCoeffs)
-
 window = None
 
 env = PushTRealEnv()
+sftp_client = SFTPClient(SERVER_HOST, USERNAME, PASSWORD)
 
 ### load policy
 
-policy_root = Path('/home/mht/PycharmProjects/DACER-Diffusion-with-Online-RL/logs/pushtcurriculum-v1/sdac_2025-03-15_16-28-36_s100_mask_multitask')
-policy_path = "policy-4000000-800000.pkl"
-# policy_root = Path('/home/mht/PycharmProjects/pusht_real/policy/sac_2025-04-26_11-20-18_s100_test_use_atp1')
-# policy_path = "policy-2600000-520000.pkl"
+policy_root = Path('/home/mht/PycharmProjects/pusht_real/policy/sdac_2025-04-15_17-04-34_s101_test_use_atp1')
 
 obs = None
 
@@ -204,6 +199,7 @@ policy = PersistFunction.load(policy_root / "deterministic.pkl")
 def policy_fn(policy_params, obs):
     return policy(policy_params, obs).clip(-1, 1)
 
+policy_path = "policy-2000000-400000.pkl"
 with open(policy_root / policy_path, "rb") as f:
     policy_params = pickle.load(f)
     
@@ -211,7 +207,7 @@ with open(policy_root / policy_path, "rb") as f:
 policy_fn(policy_params, np.zeros((10)))
 kalman_initialized = False
 last_rot = None
-
+first = True
 try:
     while True:
         # Wait for a coherent pair of frames: depth and color
@@ -235,11 +231,19 @@ try:
         # corners, ids, _ = detector.detectMarkers(color_image)
         # print(ids)
         
-        (found, color_image, marker) = markerReader.detectMarkers(color_image, markerDict)
-        
-        if found:
-            tvec = np.array(marker.tvec[0]) / 1000
-            rvec = np.array(marker.rvec[0])
+        # Convert color image to HSV color space
+        data = {'color': color_image[..., ::-1], 'depth': depth_image, 'first': first}
+        sftp_client.send_data(data, REMOTE_UPLOAD_PATH)
+        response = sftp_client.receive_response(REMOTE_RESPONSE_PATH)            
+        if response is not None:
+            first = False
+            pose = response['pose']
+            R = pose[:3, :3]
+            rvec = cv2.Rodrigues(R)[0]
+            tvec = pose[:3, 3] 
+            
+            cv2.drawFrameAxes(color_image, cameraMatrix, distortionCoeffs, rvec, tvec *1000, 40)
+           
             marker_world = pose_tran_fixed_camera(rvec, tvec, fixed_camera_pose)
             tblk_env = marker_to_env(marker_world)
             # if not kalman_initialized:
